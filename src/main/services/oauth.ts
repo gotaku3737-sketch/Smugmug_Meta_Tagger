@@ -65,7 +65,7 @@ export class OAuthService {
 
     const headers = this.oauth.toHeader(
       this.oauth.authorize(requestData)
-    );
+    ) as unknown as Record<string, string>;
 
     const response = await this.httpGet(
       `${SMUGMUG_REQUEST_TOKEN_URL}?oauth_callback=oob`,
@@ -106,7 +106,7 @@ export class OAuthService {
 
     const headers = this.oauth.toHeader(
       this.oauth.authorize(requestData, token)
-    );
+    ) as unknown as Record<string, string>;
 
     const response = await this.httpGet(
       `${SMUGMUG_ACCESS_TOKEN_URL}?oauth_verifier=${encodeURIComponent(verifier)}`,
