@@ -1,5 +1,5 @@
 // ============================================================
-// Tiered Photo Downloader
+// Tiered Photo Downloader — with retry & error resilience
 // ============================================================
 
 import fs from 'node:fs';
@@ -7,6 +7,9 @@ import path from 'node:path';
 import type { OAuthService } from './oauth';
 import type { DatabaseService } from './database';
 import type { DownloadProgress } from '../../shared/types';
+
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 2000;
 
 export class DownloaderService {
   private oauth: OAuthService;
@@ -43,31 +46,25 @@ export class DownloaderService {
     }
 
     const thumbDir = path.join(this.dataDir, 'thumbnails', albumKey);
-    if (!fs.existsSync(thumbDir)) {
-      fs.mkdirSync(thumbDir, { recursive: true });
-    }
+    ensureDir(thumbDir);
 
-    // Process in concurrent batches
     for (let i = 0; i < toDownload.length; i += this.concurrentDownloads) {
       const batch = toDownload.slice(i, i + this.concurrentDownloads);
 
       await Promise.all(
         batch.map(async (img) => {
-          const destPath = path.join(thumbDir, img.filename);
+          const destPath = path.join(thumbDir, sanitizeFilename(img.filename));
 
           try {
-            // Skip if file already exists
-            if (fs.existsSync(destPath)) {
+            if (fs.existsSync(destPath) && fs.statSync(destPath).size > 0) {
               this.db.markThumbDownloaded(img.imageKey, destPath);
-              completed++;
-              this.emitProgress(completed, total, img.filename, 'thumbnails');
-              return;
+            } else {
+              await downloadWithRetry(() => this.oauth.downloadFile(img.thumbUrl!, destPath), img.imageKey, 'thumb');
+              this.db.markThumbDownloaded(img.imageKey, destPath);
             }
-
-            await this.oauth.downloadFile(img.thumbUrl!, destPath);
-            this.db.markThumbDownloaded(img.imageKey, destPath);
           } catch (err) {
-            console.error(`Failed to download thumbnail for ${img.imageKey}:`, err);
+            console.error(`[Downloader] Failed to download thumbnail for ${img.imageKey}:`, err);
+            // Don't rethrow — continue with the rest of the batch
           }
 
           completed++;
@@ -76,7 +73,7 @@ export class DownloaderService {
       );
 
       // Yield to event loop between batches
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await sleep(10);
     }
 
     this.db.markAlbumThumbsDownloaded(albumKey);
@@ -96,29 +93,24 @@ export class DownloaderService {
     if (total === 0) return;
 
     const mediumDir = path.join(this.dataDir, 'medium', albumKey);
-    if (!fs.existsSync(mediumDir)) {
-      fs.mkdirSync(mediumDir, { recursive: true });
-    }
+    ensureDir(mediumDir);
 
     for (let i = 0; i < toDownload.length; i += this.concurrentDownloads) {
       const batch = toDownload.slice(i, i + this.concurrentDownloads);
 
       await Promise.all(
         batch.map(async (img) => {
-          const destPath = path.join(mediumDir, img.filename);
+          const destPath = path.join(mediumDir, sanitizeFilename(img.filename));
 
           try {
-            if (fs.existsSync(destPath)) {
+            if (fs.existsSync(destPath) && fs.statSync(destPath).size > 0) {
               this.db.markMediumDownloaded(img.imageKey, destPath);
-              completed++;
-              this.emitProgress(completed, total, img.filename, 'medium');
-              return;
+            } else {
+              await downloadWithRetry(() => this.oauth.downloadFile(img.mediumUrl!, destPath), img.imageKey, 'medium');
+              this.db.markMediumDownloaded(img.imageKey, destPath);
             }
-
-            await this.oauth.downloadFile(img.mediumUrl!, destPath);
-            this.db.markMediumDownloaded(img.imageKey, destPath);
           } catch (err) {
-            console.error(`Failed to download medium for ${img.imageKey}:`, err);
+            console.error(`[Downloader] Failed to download medium for ${img.imageKey}:`, err);
           }
 
           completed++;
@@ -126,7 +118,7 @@ export class DownloaderService {
         })
       );
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await sleep(10);
     }
   }
 
@@ -147,4 +139,45 @@ export class DownloaderService {
       phase,
     });
   }
+}
+
+// -----------------------------------------------------------
+// Module-level utilities
+// -----------------------------------------------------------
+
+async function downloadWithRetry(
+  fn: () => Promise<void>,
+  imageKey: string,
+  type: string,
+  retries = MAX_RETRIES
+): Promise<void> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt < retries) {
+        const delay = RETRY_DELAY_MS * (attempt + 1);
+        console.warn(`[Downloader] ${type} download failed for ${imageKey} (attempt ${attempt + 1}), retrying in ${delay}ms`);
+        await sleep(delay);
+      }
+    }
+  }
+  throw lastErr;
+}
+
+function ensureDir(dir: string): void {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+}
+
+/** Replace characters that are illegal in filesystem names */
+function sanitizeFilename(filename: string): string {
+  return filename.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
