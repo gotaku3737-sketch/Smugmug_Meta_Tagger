@@ -9,6 +9,8 @@ import { GalleryBrowser } from './pages/GalleryBrowser';
 import { FaceTrainer } from './pages/FaceTrainer';
 import { AutoTagger } from './pages/AutoTagger';
 import { SettingsPage } from './pages/SettingsPage';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { ToastProvider } from './components/Toast';
 
 // Extend window for the electronAPI bridge
 declare global {
@@ -85,7 +87,7 @@ export function App() {
     : 'Not connected';
 
   return (
-    <>
+    <ToastProvider>
       <div className="titlebar-drag-region" />
       <div className="app-layout" id="app-layout">
         {/* Sidebar */}
@@ -116,18 +118,20 @@ export function App() {
               <div className="user-details">
                 <div className="user-name">{userName}</div>
                 <div className={`user-status ${isConnected ? '' : 'disconnected'}`}>
-                  {isConnected ? 'Connected' : 'Disconnected'}
+                  {isConnected ? '● Connected' : '○ Disconnected'}
                 </div>
               </div>
             </div>
           </div>
         </aside>
 
-        {/* Main content */}
+        {/* Main content with per-page error boundary */}
         <main className="main-content" id="main-content">
-          {renderPage()}
+          <ErrorBoundary key={currentPage}>
+            {renderPage()}
+          </ErrorBoundary>
         </main>
       </div>
-    </>
+    </ToastProvider>
   );
 }
