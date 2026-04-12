@@ -7,17 +7,21 @@ import type { OAuthService } from './services/oauth';
 import type { SmugMugAPI } from './services/smugmug-api';
 import type { DatabaseService } from './services/database';
 import type { DownloaderService } from './services/downloader';
-import type { BoundingBox } from '../shared/types';
+import type { FaceEngine } from './services/face-engine';
+import type { BoundingBox, AppSettings } from '../shared/types';
 
 interface Services {
   oauth: OAuthService;
   api: SmugMugAPI;
   db: DatabaseService;
   downloader: DownloaderService;
+  faceEngine: FaceEngine;
+  settings: AppSettings;
+  onSettingsUpdate: (settings: Partial<AppSettings>) => void;
 }
 
 export function registerIpcHandlers(services: Services): void {
-  const { oauth, api, db, downloader } = services;
+  const { oauth, api, db, downloader, faceEngine, settings, onSettingsUpdate } = services;
 
   // -----------------------------------------------------------
   // OAuth / SmugMug Auth
@@ -60,7 +64,7 @@ export function registerIpcHandlers(services: Services): void {
   });
 
   ipcMain.handle('albums:getImages', async (_event, albumKey: string) => {
-    // First sync images from SmugMug if we haven't yet
+    // Sync images from SmugMug if we haven't stored them yet
     const existing = db.getImagesByAlbum(albumKey);
     if (existing.length === 0) {
       const images = await api.getAlbumImages(albumKey);
@@ -100,8 +104,22 @@ export function registerIpcHandlers(services: Services): void {
   });
 
   // -----------------------------------------------------------
-  // Faces
+  // Face Detection & Training
   // -----------------------------------------------------------
+
+  ipcMain.handle('faces:detectInAlbum', async (event, albumKey: string) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    faceEngine.onProgress((progress) => {
+      win?.webContents.send('faces:detectionProgress', progress);
+    });
+
+    try {
+      await faceEngine.detectInAlbum(albumKey);
+    } catch (err) {
+      console.error('[IPC] faces:detectInAlbum error:', err);
+      throw err;
+    }
+  });
 
   ipcMain.handle('faces:getPeople', async () => {
     return db.getAllPeople();
@@ -117,20 +135,45 @@ export function registerIpcHandlers(services: Services): void {
     bbox: BoundingBox,
     personName: string
   ) => {
-    // Ensure person exists
-    const personId = db.addPerson(personName);
+    // Get the medium-res path for this image so we can extract the real descriptor
+    const image = db.getImage(imageKey);
+    if (!image) throw new Error(`Image not found: ${imageKey}`);
 
-    // Create a placeholder descriptor for now — face-engine will be wired in Phase 3
-    const placeholder = new Float32Array(128);
-    db.addFaceDescriptor(personId, placeholder, imageKey, bbox);
+    if (image.mediumPath && image.mediumDownloaded) {
+      // Run actual face detection and store real descriptor
+      try {
+        await faceEngine.trainFace(imageKey, image.mediumPath, bbox, personName);
+      } catch (err) {
+        console.error('[IPC] faces:trainFace error — falling back to zero descriptor:', err);
+        const personId = db.addPerson(personName);
+        db.addFaceDescriptor(personId, new Float32Array(128), imageKey, bbox);
+      }
+    } else {
+      // Medium-res not downloaded yet — store placeholder
+      const personId = db.addPerson(personName);
+      db.addFaceDescriptor(personId, new Float32Array(128), imageKey, bbox);
+    }
   });
 
   // -----------------------------------------------------------
-  // Tags
+  // Auto-Tagger
   // -----------------------------------------------------------
+
+  ipcMain.handle('tags:runAutoTagger', async () => {
+    try {
+      await faceEngine.runAutoTagger();
+    } catch (err) {
+      console.error('[IPC] tags:runAutoTagger error:', err);
+      throw err;
+    }
+  });
 
   ipcMain.handle('tags:getUntaggedResults', async () => {
     return db.getUntaggedImagesWithFaces();
+  });
+
+  ipcMain.handle('tags:approveMatches', async (_event, imageKey: string, approvedNames: string[]) => {
+    faceEngine.approveMatches(imageKey, approvedNames);
   });
 
   ipcMain.handle('tags:uploadTags', async (event, imageKeys: string[]) => {
@@ -149,7 +192,7 @@ export function registerIpcHandlers(services: Services): void {
         await api.updateImageKeywords(imageKey, newKeywords);
         db.markTagsUploaded(imageKey);
       } catch (err) {
-        console.error(`Failed to upload tags for ${imageKey}:`, err);
+        console.error(`[IPC] Failed to upload tags for ${imageKey}:`, err);
       }
 
       completed++;
@@ -159,7 +202,7 @@ export function registerIpcHandlers(services: Services): void {
         currentImage: image.filename,
       });
 
-      // Small delay to avoid rate limiting
+      // Respect SmugMug rate limits: ~5 req/s
       await new Promise(resolve => setTimeout(resolve, 200));
     }
   });
@@ -167,6 +210,19 @@ export function registerIpcHandlers(services: Services): void {
   // -----------------------------------------------------------
   // Settings & Stats
   // -----------------------------------------------------------
+
+  ipcMain.handle('settings:get', async () => {
+    return settings;
+  });
+
+  ipcMain.handle('settings:update', async (_event, partial: Partial<AppSettings>) => {
+    onSettingsUpdate(partial);
+
+    // Apply live settings changes
+    if (partial.recognitionThreshold !== undefined) {
+      faceEngine.setThreshold(partial.recognitionThreshold);
+    }
+  });
 
   ipcMain.handle('settings:getStats', async () => {
     return db.getStats();

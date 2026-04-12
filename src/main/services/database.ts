@@ -262,6 +262,44 @@ export class DatabaseService {
     }));
   }
 
+  /** Images that have faces detected but haven't been matched against trained people yet. */
+  getImagesWithFacesForMatching(): ImageRecord[] {
+    const rows = this.db.prepare(`
+      SELECT id, image_key as imageKey, album_key as albumKey, filename,
+             thumb_path as thumbPath, medium_path as mediumPath,
+             thumb_url as thumbUrl, medium_url as mediumUrl, original_url as originalUrl,
+             thumb_downloaded as thumbDownloaded, medium_downloaded as mediumDownloaded,
+             faces_detected as facesDetected, face_count as faceCount,
+             tags_uploaded as tagsUploaded, existing_keywords as existingKeywords,
+             detected_people as detectedPeople, created_at as createdAt
+      FROM images
+      WHERE faces_detected = 1 AND medium_downloaded = 1 AND tags_uploaded = 0
+      ORDER BY album_key, filename
+    `).all() as (Omit<ImageRecord, 'thumbDownloaded' | 'mediumDownloaded' | 'facesDetected' | 'tagsUploaded' | 'detectedPeople'> & {
+      thumbDownloaded: number;
+      mediumDownloaded: number;
+      facesDetected: number;
+      tagsUploaded: number;
+      detectedPeople: string | null;
+    })[];
+
+    return rows.map(r => ({
+      ...r,
+      thumbDownloaded: !!r.thumbDownloaded,
+      mediumDownloaded: !!r.mediumDownloaded,
+      facesDetected: !!r.facesDetected,
+      tagsUploaded: !!r.tagsUploaded,
+      detectedPeople: r.detectedPeople ? JSON.parse(r.detectedPeople) : undefined,
+    }));
+  }
+
+  /** Overwrite the detected_people field for an image (used to approve/reject matches). */
+  updateDetectedPeople(imageKey: string, detectedPeople: FaceMatch[]): void {
+    this.db.prepare(`
+      UPDATE images SET detected_people = ? WHERE image_key = ?
+    `).run(JSON.stringify(detectedPeople), imageKey);
+  }
+
   // -----------------------------------------------------------
   // People & Face Descriptors
   // -----------------------------------------------------------
