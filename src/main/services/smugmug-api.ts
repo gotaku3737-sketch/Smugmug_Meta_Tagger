@@ -1,11 +1,16 @@
 // ============================================================
-// SmugMug API v2 Client
+// SmugMug API v2 Client — with retry & rate-limit handling
 // ============================================================
 
 import type { OAuthService } from './oauth';
 import type { SmugMugAlbum, SmugMugImage } from '../../shared/types';
 
 const API_BASE = 'https://api.smugmug.com';
+
+/** Max retries for transient failures (429, 5xx, network errors) */
+const MAX_RETRIES = 5;
+/** Base delay for exponential backoff (ms) */
+const BASE_DELAY_MS = 1000;
 
 interface ApiAlbum {
   AlbumKey: string;
@@ -56,9 +61,10 @@ export class SmugMugAPI {
   async getNickname(): Promise<string> {
     if (this.nickname) return this.nickname;
 
-    const data = await this.oauth.signedGet(`${API_BASE}/api/v2!authuser`) as {
-      Response: { User: { NickName: string } };
-    };
+    const data = await this.requestWithRetry(() =>
+      this.oauth.signedGet(`${API_BASE}/api/v2!authuser`)
+    ) as { Response: { User: { NickName: string } } };
+
     this.nickname = data.Response.User.NickName;
     return this.nickname;
   }
@@ -72,12 +78,14 @@ export class SmugMugAPI {
     const albums: SmugMugAlbum[] = [];
 
     let start = 1;
-    const count = 100; // Max per page
+    const count = 100;
     let hasMore = true;
 
     while (hasMore) {
-      const data = await this.oauth.signedGet(
-        `${API_BASE}/api/v2/user/${nickname}!albums?start=${start}&count=${count}&_expand=HighlightImage`
+      const data = await this.requestWithRetry(() =>
+        this.oauth.signedGet(
+          `${API_BASE}/api/v2/user/${nickname}!albums?start=${start}&count=${count}&_expand=HighlightImage`
+        )
       ) as {
         Response: {
           Album?: ApiAlbum[];
@@ -120,8 +128,10 @@ export class SmugMugAPI {
     let hasMore = true;
 
     while (hasMore) {
-      const data = await this.oauth.signedGet(
-        `${API_BASE}/api/v2/album/${albumKey}!images?start=${start}&count=${count}&_expand=ImageSizeDetails`
+      const data = await this.requestWithRetry(() =>
+        this.oauth.signedGet(
+          `${API_BASE}/api/v2/album/${albumKey}!images?start=${start}&count=${count}&_expand=ImageSizeDetails`
+        )
       ) as {
         Response: {
           AlbumImage?: ApiImage[];
@@ -131,20 +141,25 @@ export class SmugMugAPI {
 
       const apiImages = data.Response.AlbumImage || [];
 
-      for (const img of apiImages) {
-        const sizes = await this.getImageSizes(img);
+      // Fetch image sizes in parallel (up to 10 at a time) to avoid serial bottleneck
+      const CHUNK = 10;
+      for (let i = 0; i < apiImages.length; i += CHUNK) {
+        const chunk = apiImages.slice(i, i + CHUNK);
+        const sizes = await Promise.all(chunk.map(img => this.getImageSizes(img)));
 
-        images.push({
-          imageKey: img.ImageKey,
-          albumKey,
-          filename: img.FileName,
-          title: img.Title,
-          caption: img.Caption,
-          keywords: img.Keywords || '',
-          thumbUrl: sizes.thumbUrl,
-          mediumUrl: sizes.mediumUrl,
-          originalUrl: sizes.originalUrl,
-          webUri: img.WebUri,
+        chunk.forEach((img, idx) => {
+          images.push({
+            imageKey: img.ImageKey,
+            albumKey,
+            filename: img.FileName,
+            title: img.Title,
+            caption: img.Caption,
+            keywords: img.Keywords || '',
+            thumbUrl: sizes[idx].thumbUrl,
+            mediumUrl: sizes[idx].mediumUrl,
+            originalUrl: sizes[idx].originalUrl,
+            webUri: img.WebUri,
+          });
         });
       }
 
@@ -168,16 +183,16 @@ export class SmugMugAPI {
     mediumUrl: string;
     originalUrl: string;
   }> {
-    // Try to get sizes from expanded data or via separate request
     let sizesUri = img.Uris?.ImageSizeDetails?.Uri || img.Uris?.ImageSizes?.Uri;
 
     if (!sizesUri) {
-      // Construct the URI manually
       sizesUri = `/api/v2/image/${img.ImageKey}!sizedetails`;
     }
 
     try {
-      const data = await this.oauth.signedGet(`${API_BASE}${sizesUri}`) as {
+      const data = await this.requestWithRetry(() =>
+        this.oauth.signedGet(`${API_BASE}${sizesUri}`)
+      ) as {
         Response: {
           ImageSizeDetails?: Record<string, { Url: string; Width: number; Height: number }>;
           ImageSizes?: {
@@ -207,10 +222,9 @@ export class SmugMugAPI {
         };
       }
     } catch (err) {
-      console.warn(`Failed to get sizes for image ${img.ImageKey}:`, err);
+      console.warn(`[SmugMugAPI] Failed to get sizes for image ${img.ImageKey}:`, err);
     }
 
-    // Fallback to thumbnail if available
     return {
       thumbUrl: img.ThumbnailUrl || '',
       mediumUrl: '',
@@ -223,9 +237,61 @@ export class SmugMugAPI {
   // -----------------------------------------------------------
 
   async updateImageKeywords(imageKey: string, keywords: string): Promise<void> {
-    await this.oauth.signedPatch(
-      `${API_BASE}/api/v2/image/${imageKey}`,
-      { Keywords: keywords }
+    await this.requestWithRetry(() =>
+      this.oauth.signedPatch(
+        `${API_BASE}/api/v2/image/${imageKey}`,
+        { Keywords: keywords }
+      )
     );
   }
+
+  // -----------------------------------------------------------
+  // Retry Helper — exponential backoff, respects 429 Retry-After
+  // -----------------------------------------------------------
+
+  private async requestWithRetry<T>(
+    fn: () => Promise<T>,
+    retries = MAX_RETRIES
+  ): Promise<T> {
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        return await fn();
+      } catch (err) {
+        lastError = err;
+
+        const message = err instanceof Error ? err.message : String(err);
+
+        // Parse HTTP status from error message (format: "HTTP 429: ...")
+        const statusMatch = message.match(/HTTP (\d+)/);
+        const status = statusMatch ? parseInt(statusMatch[1], 10) : 0;
+
+        // Don't retry on client errors except 429 (rate limit)
+        if (status >= 400 && status < 500 && status !== 429) {
+          console.error(`[SmugMugAPI] Non-retryable error (${status}):`, message);
+          throw err;
+        }
+
+        if (attempt < retries) {
+          // For 429, honour a Retry-After hint of 10s; otherwise use exponential backoff
+          const delayMs = status === 429
+            ? 10_000
+            : BASE_DELAY_MS * Math.pow(2, attempt);
+
+          console.warn(
+            `[SmugMugAPI] Request failed (attempt ${attempt + 1}/${retries + 1}), retrying in ${delayMs}ms. Error: ${message}`
+          );
+
+          await sleep(delayMs);
+        }
+      }
+    }
+
+    throw lastError;
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
