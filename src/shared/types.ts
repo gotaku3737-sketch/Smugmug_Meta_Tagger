@@ -236,6 +236,11 @@ export interface ElectronAPI {
     clearTrainingData(): Promise<void>;
     resetDatabase(): Promise<void>;
   };
+
+  // Utils
+  util: {
+    openExternal(url: string): Promise<void>;
+  };
 }
 
 // -----------------------------------------------------------

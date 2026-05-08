@@ -76,6 +76,10 @@ const electronAPI: ElectronAPI = {
     clearTrainingData: () => ipcRenderer.invoke('settings:clearTrainingData'),
     resetDatabase: () => ipcRenderer.invoke('settings:resetDatabase'),
   },
+
+  util: {
+    openExternal: (url: string) => ipcRenderer.invoke('util:openExternal', url),
+  },
 };
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);

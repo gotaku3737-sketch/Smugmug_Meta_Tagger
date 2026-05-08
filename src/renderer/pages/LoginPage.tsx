@@ -33,7 +33,7 @@ export function LoginPage({ authStatus, onAuthComplete }: LoginPageProps) {
       setPendingAuth(requestToken);
 
       // Open the authorization URL in the system browser
-      window.open(requestToken.authorizationUrl, '_blank');
+      await window.electronAPI.util.openExternal(requestToken.authorizationUrl);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start authentication');
     } finally {
