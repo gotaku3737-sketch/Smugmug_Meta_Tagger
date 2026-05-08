@@ -2,7 +2,7 @@
 // IPC Handler Registration
 // ============================================================
 
-import { ipcMain, BrowserWindow } from 'electron';
+import { ipcMain, BrowserWindow, shell } from 'electron';
 import type { OAuthService } from './services/oauth';
 import type { SmugMugAPI } from './services/smugmug-api';
 import type { DatabaseService } from './services/database';
@@ -234,5 +234,13 @@ export function registerIpcHandlers(services: Services): void {
 
   ipcMain.handle('settings:resetDatabase', async () => {
     db.resetDatabase();
+  });
+
+  // -----------------------------------------------------------
+  // Utils
+  // -----------------------------------------------------------
+
+  ipcMain.handle('util:openExternal', async (_event, url: string) => {
+    await shell.openExternal(url);
   });
 }
