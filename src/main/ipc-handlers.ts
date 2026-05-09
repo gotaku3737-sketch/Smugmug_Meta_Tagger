@@ -241,6 +241,15 @@ export function registerIpcHandlers(services: Services): void {
   // -----------------------------------------------------------
 
   ipcMain.handle('util:openExternal', async (_event, url: string) => {
-    await shell.openExternal(url);
+    try {
+      const parsedUrl = new URL(url);
+      if (['http:', 'https:', 'mailto:'].includes(parsedUrl.protocol)) {
+        await shell.openExternal(url);
+      } else {
+        console.warn(`[Security] Blocked util:openExternal with insecure protocol: ${parsedUrl.protocol}`);
+      }
+    } catch (err) {
+      console.warn('[Security] Blocked util:openExternal with invalid URL:', err);
+    }
   });
 }

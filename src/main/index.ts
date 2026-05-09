@@ -113,7 +113,16 @@ const createWindow = (): void => {
 
   // Security: Handle window.open by opening in external browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    try {
+      const parsedUrl = new URL(url);
+      if (['http:', 'https:', 'mailto:'].includes(parsedUrl.protocol)) {
+        shell.openExternal(url);
+      } else {
+        console.warn(`[Security] Blocked window.open with insecure protocol: ${parsedUrl.protocol}`);
+      }
+    } catch (err) {
+      console.warn('[Security] Blocked window.open with invalid URL:', err);
+    }
     return { action: 'deny' };
   });
 
