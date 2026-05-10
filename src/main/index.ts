@@ -126,6 +126,22 @@ const createWindow = (): void => {
     return { action: 'deny' };
   });
 
+  // Security: Prevent navigation to outside URLs within the app
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    try {
+      const parsedUrl = new URL(url);
+      // Depending on whether we are in dev (MAIN_WINDOW_VITE_DEV_SERVER_URL) or production, check the origin
+      const isDevServer = typeof MAIN_WINDOW_VITE_DEV_SERVER_URL !== 'undefined' && parsedUrl.origin === MAIN_WINDOW_VITE_DEV_SERVER_URL;
+      if (!isDevServer && parsedUrl.protocol !== 'file:') {
+        event.preventDefault();
+        console.warn(`[Security] Blocked navigation to external URL: ${url}`);
+      }
+    } catch (err) {
+      event.preventDefault();
+      console.warn('[Security] Blocked navigation to invalid URL:', err);
+    }
+  });
+
   // Load the renderer
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
