@@ -7,6 +7,7 @@ import path from 'node:path';
 import type { OAuthService } from './oauth';
 import type { DatabaseService } from './database';
 import type { DownloadProgress } from '../../shared/types';
+import { sleep } from '../../shared/utils';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
@@ -176,8 +177,4 @@ function ensureDir(dir: string): void {
 /** Replace characters that are illegal in filesystem names */
 function sanitizeFilename(filename: string): string {
   return filename.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }

@@ -7,6 +7,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import type { DatabaseService } from './database';
 import type { DetectedFace, FaceMatch, FaceDetectionProgress, BoundingBox } from '../../shared/types';
+import { sleep } from '../../shared/utils';
 
 // We defer imports until after canvas patch is applied
 let faceapi: typeof import('@vladmandic/face-api');
@@ -160,7 +161,7 @@ export class FaceEngine {
       }));
 
       // Yield to event loop between batches to keep UI responsive
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await sleep(50);
     }
 
     console.log(`[FaceEngine] Done. ${completed} images processed, ${totalFacesFound} faces found.`);
@@ -254,7 +255,7 @@ export class FaceEngine {
       }
 
       // Yield between images
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await sleep(10);
     }
 
     console.log('[FaceEngine] Auto-tagging complete.');
