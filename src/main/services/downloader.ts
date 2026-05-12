@@ -45,7 +45,7 @@ export class DownloaderService {
       return;
     }
 
-    const thumbDir = path.join(this.dataDir, 'thumbnails', albumKey);
+    const thumbDir = path.join(this.dataDir, 'thumbnails', sanitizeFilename(albumKey));
     ensureDir(thumbDir);
 
     for (let i = 0; i < toDownload.length; i += this.concurrentDownloads) {
@@ -92,7 +92,7 @@ export class DownloaderService {
 
     if (total === 0) return;
 
-    const mediumDir = path.join(this.dataDir, 'medium', albumKey);
+    const mediumDir = path.join(this.dataDir, 'medium', sanitizeFilename(albumKey));
     ensureDir(mediumDir);
 
     for (let i = 0; i < toDownload.length; i += this.concurrentDownloads) {
@@ -175,6 +175,7 @@ function ensureDir(dir: string): void {
 
 /** Replace characters that are illegal in filesystem names */
 function sanitizeFilename(filename: string): string {
+  // eslint-disable-next-line no-control-regex
   return filename.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
 }
 
