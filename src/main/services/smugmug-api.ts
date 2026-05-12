@@ -4,6 +4,7 @@
 
 import type { OAuthService } from './oauth';
 import type { SmugMugAlbum, SmugMugImage } from '../../shared/types';
+import { sleep } from '../../shared/utils';
 
 const API_BASE = 'https://api.smugmug.com';
 
@@ -290,8 +291,4 @@ export class SmugMugAPI {
 
     throw lastError;
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
