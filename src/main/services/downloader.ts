@@ -7,6 +7,7 @@ import path from 'node:path';
 import type { OAuthService } from './oauth';
 import type { DatabaseService } from './database';
 import type { DownloadProgress } from '../../shared/types';
+import { sleep } from '../../shared/utils';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
@@ -45,7 +46,9 @@ export class DownloaderService {
       return;
     }
 
-    const thumbDir = path.join(this.dataDir, 'thumbnails', sanitizeFilename(albumKey));
+    // Security: Sanitize albumKey to prevent path traversal
+    const safeAlbumKey = sanitizeFilename(albumKey);
+    const thumbDir = path.join(this.dataDir, 'thumbnails', safeAlbumKey);
     ensureDir(thumbDir);
 
     for (let i = 0; i < toDownload.length; i += this.concurrentDownloads) {
@@ -92,7 +95,9 @@ export class DownloaderService {
 
     if (total === 0) return;
 
-    const mediumDir = path.join(this.dataDir, 'medium', sanitizeFilename(albumKey));
+    // Security: Sanitize albumKey to prevent path traversal
+    const safeAlbumKey = sanitizeFilename(albumKey);
+    const mediumDir = path.join(this.dataDir, 'medium', safeAlbumKey);
     ensureDir(mediumDir);
 
     for (let i = 0; i < toDownload.length; i += this.concurrentDownloads) {
@@ -177,8 +182,4 @@ function ensureDir(dir: string): void {
 function sanitizeFilename(filename: string): string {
   // eslint-disable-next-line no-control-regex
   return filename.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
