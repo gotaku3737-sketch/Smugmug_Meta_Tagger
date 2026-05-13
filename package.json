@@ -3,7 +3,7 @@
   "productName": "smugmug_meta_tagger",
   "version": "1.0.0",
   "description": "My Electron application description",
-  "main": ".vite/build/main.js",
+  "main": ".vite/build/index.js",
   "private": true,
   "scripts": {
     "start": "electron-forge start",

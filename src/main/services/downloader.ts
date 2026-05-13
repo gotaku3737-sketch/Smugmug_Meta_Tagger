@@ -46,7 +46,9 @@ export class DownloaderService {
       return;
     }
 
-    const thumbDir = path.join(this.dataDir, 'thumbnails', albumKey);
+    // Security: Sanitize albumKey to prevent path traversal
+    const safeAlbumKey = sanitizeFilename(albumKey);
+    const thumbDir = path.join(this.dataDir, 'thumbnails', safeAlbumKey);
     ensureDir(thumbDir);
 
     for (let i = 0; i < toDownload.length; i += this.concurrentDownloads) {
@@ -93,7 +95,9 @@ export class DownloaderService {
 
     if (total === 0) return;
 
-    const mediumDir = path.join(this.dataDir, 'medium', albumKey);
+    // Security: Sanitize albumKey to prevent path traversal
+    const safeAlbumKey = sanitizeFilename(albumKey);
+    const mediumDir = path.join(this.dataDir, 'medium', safeAlbumKey);
     ensureDir(mediumDir);
 
     for (let i = 0; i < toDownload.length; i += this.concurrentDownloads) {
