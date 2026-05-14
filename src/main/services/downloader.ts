@@ -178,8 +178,13 @@ function ensureDir(dir: string): void {
   }
 }
 
-/** Replace characters that are illegal in filesystem names */
+/** Replace characters that are illegal in filesystem names and prevent path traversal */
 function sanitizeFilename(filename: string): string {
   // eslint-disable-next-line no-control-regex
-  return filename.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+  const sanitized = filename.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+  // Security: Prevent directory traversal if the filename resolves to exactly '.' or '..'
+  if (sanitized === '.' || sanitized === '..') {
+    return '_' + sanitized;
+  }
+  return sanitized;
 }
