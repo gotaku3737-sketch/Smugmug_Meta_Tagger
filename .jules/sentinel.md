@@ -3,7 +3,12 @@
 **Learning:** Adding navigation restrictions in Electron is essential to prevent unauthorized execution of external origins within the app.
 **Prevention:** Always implement `will-navigate` event listeners to block arbitrary navigation, restricting it to trusted local dev servers or local `file://` protocols.
 
-## 2024-05-11 - Encrypt API Keys at Rest
-**Vulnerability:** SmugMug API `consumerKey` and `accessToken` were stored in plaintext on the local filesystem.
-**Learning:** Only the `secret` portions were encrypted. A malicious local application could read the `credentials.json` file and extract API keys.
-**Prevention:** All sensitive API credentials should be encrypted at rest. When fixing legacy systems, a try/catch fallback can maintain backwards compatibility for old, unencrypted data.
+## 2026-05-13 - [Path Traversal via API Identifiers]
+**Vulnerability:** Path traversal vulnerability in `src/main/services/downloader.ts` where `albumKey` (an identifier from SmugMug API) was directly interpolated into file paths (`path.join(..., albumKey)`) without sanitization.
+**Learning:** Identifiers from external APIs should not be trusted as safe for file paths. Always explicitly sanitize all external inputs, including API keys and IDs, when using them to construct paths.
+**Prevention:** Use an application-wide sanitization function (like `sanitizeFilename`) for all user or external API input that forms any part of a file path.
+
+## 2025-05-18 - [Path Traversal bypass in sanitizeFilename]
+**Vulnerability:** A path traversal vulnerability existed in the `sanitizeFilename` function, where exact strings `.` and `..` were not replaced because they did not contain characters stripped by the regex. When appended to a directory via `path.join`, this allowed moving up directories despite sanitization attempts.
+**Learning:** Even explicit sanitization functions can miss critical path traversal edge-cases if they only strip slashes and illegal file characters. Exact parent-directory (`..`) matches must be explicitly handled.
+**Prevention:** Ensure all sanitization routines mitigate exactly `.` and `..` references by escaping them (e.g. prefixing them with an underscore).

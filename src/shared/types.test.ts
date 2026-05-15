@@ -16,7 +16,9 @@ describe('Keyword Helpers', () => {
 
   test('parsePersonKeywords should handle empty or null input', () => {
     assert.deepStrictEqual(parsePersonKeywords(''), []);
-    assert.deepStrictEqual(parsePersonKeywords(null as unknown as string), []);
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
+    assert.deepStrictEqual(parsePersonKeywords(null), []);
   });
 
   test('parsePersonKeywords should handle whitespace and extra semicolons', () => {

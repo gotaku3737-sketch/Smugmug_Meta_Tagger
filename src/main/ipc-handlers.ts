@@ -9,6 +9,7 @@ import type { DatabaseService } from './services/database';
 import type { DownloaderService } from './services/downloader';
 import type { FaceEngine } from './services/face-engine';
 import type { BoundingBox, AppSettings } from '../shared/types';
+import { sleep } from '../shared/utils';
 
 interface Services {
   oauth: OAuthService;
@@ -203,7 +204,7 @@ export function registerIpcHandlers(services: Services): void {
       });
 
       // Respect SmugMug rate limits: ~5 req/s
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await sleep(200);
     }
   });
 
