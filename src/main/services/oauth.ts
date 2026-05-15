@@ -221,6 +221,11 @@ export class OAuthService {
         }
 
         const parsedUrl = new URL(requestUrl);
+        if (parsedUrl.protocol !== 'https:') {
+          reject(new Error(`Invalid protocol for download: ${parsedUrl.protocol}. Only HTTPS is allowed.`));
+          return;
+        }
+
         const options = {
           hostname: parsedUrl.hostname,
           path: parsedUrl.pathname + parsedUrl.search,
@@ -230,7 +235,8 @@ export class OAuthService {
 
         const req = https.request(options, (res) => {
           if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-            makeRequest(res.headers.location, redirectCount + 1);
+            const redirectUrl = new URL(res.headers.location, requestUrl).href;
+            makeRequest(redirectUrl, redirectCount + 1);
             return;
           }
 
@@ -305,6 +311,11 @@ export class OAuthService {
   ): Promise<string> {
     return new Promise((resolve, reject) => {
       const parsedUrl = new URL(url);
+      if (parsedUrl.protocol !== 'https:') {
+        reject(new Error(`Invalid protocol for request: ${parsedUrl.protocol}. Only HTTPS is allowed.`));
+        return;
+      }
+
       const options = {
         hostname: parsedUrl.hostname,
         path: parsedUrl.pathname + parsedUrl.search,
