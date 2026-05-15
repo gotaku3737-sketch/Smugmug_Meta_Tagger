@@ -16,8 +16,7 @@ describe('Keyword Helpers', () => {
 
   test('parsePersonKeywords should handle empty or null input', () => {
     assert.deepStrictEqual(parsePersonKeywords(''), []);
-    // @ts-ignore
-    assert.deepStrictEqual(parsePersonKeywords(null), []);
+    assert.deepStrictEqual(parsePersonKeywords(null as unknown as string), []);
   });
 
   test('parsePersonKeywords should handle whitespace and extra semicolons', () => {

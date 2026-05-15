@@ -347,9 +347,9 @@ export class OAuthService {
       }
 
       const stored: StoredCredentials = {
-        consumerKey: this.consumerKey,
+        consumerKey: this.encrypt(this.consumerKey),
         consumerSecret: this.encrypt(this.consumerSecret),
-        accessToken: this.accessToken || undefined,
+        accessToken: this.accessToken ? this.encrypt(this.accessToken) : undefined,
         accessTokenSecret: this.accessTokenSecret ? this.encrypt(this.accessTokenSecret) : undefined,
       };
 
@@ -366,12 +366,12 @@ export class OAuthService {
       const raw = fs.readFileSync(this.credentialsPath, 'utf-8');
       const stored: StoredCredentials = JSON.parse(raw);
 
-      this.consumerKey = stored.consumerKey;
+      this.consumerKey = this.decrypt(stored.consumerKey);
       this.consumerSecret = this.decrypt(stored.consumerSecret);
       this.initOAuth();
 
       if (stored.accessToken && stored.accessTokenSecret) {
-        this.accessToken = stored.accessToken;
+        this.accessToken = this.decrypt(stored.accessToken);
         this.accessTokenSecret = this.decrypt(stored.accessTokenSecret);
       }
     } catch (err) {
@@ -380,6 +380,7 @@ export class OAuthService {
   }
 
   private encrypt(text: string): string {
+    if (!text) return '';
     if (safeStorage.isEncryptionAvailable()) {
       return safeStorage.encryptString(text).toString('base64');
     }
@@ -388,11 +389,17 @@ export class OAuthService {
   }
 
   private decrypt(encoded: string): string {
+    if (!encoded) return '';
     if (encoded.startsWith('plain:')) {
       return encoded.slice(6);
     }
     if (safeStorage.isEncryptionAvailable()) {
-      return safeStorage.decryptString(Buffer.from(encoded, 'base64'));
+      try {
+        return safeStorage.decryptString(Buffer.from(encoded, 'base64'));
+      } catch (e) {
+        // Fallback for backward compatibility where fields like consumerKey were stored as plaintext
+        return encoded;
+      }
     }
     return encoded;
   }
