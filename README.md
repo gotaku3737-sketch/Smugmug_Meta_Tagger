@@ -231,6 +231,9 @@ Smugmug_Meta_Tagger/
 │   │       └── VirtualList.tsx      # Windowed list for large datasets
 │   └── shared/
 │       └── types.ts                 # Shared TypeScript interfaces + helpers
+├── tests/                           # Spec-Driven Development (BDD)
+│   ├── features/                    # Gherkin specification files (.feature)
+│   └── step_defs/                   # Cucumber step definitions
 ├── models/                          # face-api.js model weights (~12 MB)
 │   ├── ssd_mobilenetv1_model*
 │   ├── face_landmark_68_model*
@@ -256,6 +259,23 @@ Person:Jane Smith; Person:John Doe; vacation; hawaii
 - Existing non-person keywords are **always preserved**
 - Old `Person:` tags for the same image are replaced (not duplicated)
 - Tags are semicolon-delimited, matching SmugMug's format
+
+---
+
+## Testing (Spec-Driven Development)
+
+This project uses Spec-Driven Development (SDD) to formalize requirements. Testing is powered by [Cucumber.js](https://github.com/cucumber/cucumber-js).
+
+The tests are defined in human-readable Gherkin specifications (`.feature` files) and implemented using TypeScript step definitions.
+
+### Running Tests
+
+```bash
+# Run the BDD test suite
+npm run test:bdd
+```
+
+This will execute the Cucumber test runner and display the results of all scenarios.
 
 ---
 
