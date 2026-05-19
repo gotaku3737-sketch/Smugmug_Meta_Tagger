@@ -162,6 +162,12 @@ const createWindow = (): void => {
 // App Lifecycle
 // -----------------------------------------------------------
 
+app.on('web-contents-created', (event, contents) => {
+  contents.on('will-attach-webview', (e) => {
+    e.preventDefault();
+  });
+});
+
 app.on('ready', () => {
   initializeServices();
   createWindow();

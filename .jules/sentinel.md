@@ -17,3 +17,8 @@
 **Vulnerability:** The `downloadFile` and `httpRequest` methods in the OAuth service lacked strict URL protocol validation. They could be tricked into requesting arbitrary URIs or local file paths (SSRF). Additionally, redirects were loosely handled, potentially crashing on relative URL strings.
 **Learning:** When making requests (especially following redirects), always explicitly validate the target protocol against a strict whitelist (e.g. `https:`) and safely resolve redirect URLs against the base URL.
 **Prevention:** In `https.request` or any networking code, throw an error if the protocol is not `https:`. Ensure `res.headers.location` is parsed using `new URL(location, baseUrl).href`.
+
+## 2025-05-19 - [Missing Content Security Policy and Unrestricted Webviews]
+**Vulnerability:** The application was missing a strict Content Security Policy (CSP) and allowed unauthorized webviews, which could expose the app to XSS and arbitrary external content rendering.
+**Learning:** In Electron, strict CSP and blocking unneeded renderer capabilities (like `webview`) are critical layers of defense-in-depth.
+**Prevention:** Always inject a strict CSP tag and use `app.on('web-contents-created')` to block `will-attach-webview` to prevent abuse.
