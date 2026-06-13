@@ -22,3 +22,8 @@
 **Vulnerability:** The application was missing a strict Content Security Policy (CSP) and allowed unauthorized webviews, which could expose the app to XSS and arbitrary external content rendering.
 **Learning:** In Electron, strict CSP and blocking unneeded renderer capabilities (like `webview`) are critical layers of defense-in-depth.
 **Prevention:** Always inject a strict CSP tag and use `app.on('web-contents-created')` to block `will-attach-webview` to prevent abuse.
+
+## 2025-05-20 - [Unrestricted Web Permissions]
+**Vulnerability:** The application was missing an explicit permission request handler, which means the application might allow web content to silently access privileged APIs like geolocation, camera, or microphone if the Electron version defaults to permissive.
+**Learning:** Adding a strict default permission request handler in Electron is essential to adhere to the principle of least privilege.
+**Prevention:** Always implement `session.defaultSession.setPermissionRequestHandler` to deny unexpected permission requests by default.

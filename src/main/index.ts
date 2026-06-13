@@ -2,7 +2,7 @@
 // Electron Main Process Entry Point
 // ============================================================
 
-import { app, BrowserWindow, shell } from 'electron';
+import { app, BrowserWindow, shell, session } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import started from 'electron-squirrel-startup';
@@ -169,6 +169,12 @@ app.on('web-contents-created', (event, contents) => {
 });
 
 app.on('ready', () => {
+  // Security: Deny all web permission requests (e.g., geolocation, media) by default
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    console.warn(`[Security] Blocked permission request for: ${permission}`);
+    callback(false);
+  });
+
   initializeServices();
   createWindow();
 });
