@@ -23,7 +23,7 @@
 **Learning:** In Electron, strict CSP and blocking unneeded renderer capabilities (like `webview`) are critical layers of defense-in-depth.
 **Prevention:** Always inject a strict CSP tag and use `app.on('web-contents-created')` to block `will-attach-webview` to prevent abuse.
 
-## 2026-06-11 - [Unhandled Permission Requests]
-**Vulnerability:** The application was missing a global permission request handler (`setPermissionRequestHandler`), potentially allowing compromised renderers to automatically acquire sensitive user permissions like geolocation, notifications, or media devices.
-**Learning:** In Electron, web permissions (like media, geolocation, etc.) may be granted automatically if not explicitly handled. Relying on default behavior violates the principle of least privilege.
-**Prevention:** Always implement `session.defaultSession.setPermissionRequestHandler` to explicitly deny all unexpected permission requests.
+## 2025-05-20 - [Unrestricted Web Permissions]
+**Vulnerability:** The application was missing an explicit permission request handler, which means the application might allow web content to silently access privileged APIs like geolocation, camera, or microphone if the Electron version defaults to permissive.
+**Learning:** Adding a strict default permission request handler in Electron is essential to adhere to the principle of least privilege.
+**Prevention:** Always implement `session.defaultSession.setPermissionRequestHandler` to deny unexpected permission requests by default.
