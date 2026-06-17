@@ -364,7 +364,14 @@ export class OAuthService {
         accessTokenSecret: this.accessTokenSecret ? this.encrypt(this.accessTokenSecret) : undefined,
       };
 
-      fs.writeFileSync(this.credentialsPath, JSON.stringify(stored, null, 2));
+      // Security: Restrict file permissions to owner read/write (0o600)
+      fs.writeFileSync(this.credentialsPath, JSON.stringify(stored, null, 2), { mode: 0o600 });
+      // Ensure existing files have permissions updated
+      try {
+        fs.chmodSync(this.credentialsPath, 0o600);
+      } catch (chmodErr) {
+        // Ignore chmod errors on systems that don't support it (e.g., Windows)
+      }
     } catch (err) {
       console.error('Failed to save credentials:', err);
     }
