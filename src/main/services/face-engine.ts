@@ -249,6 +249,8 @@ export class FaceEngine {
 
         if (matches.length > 0) {
           this.db.markFacesDetected(img.imageKey, faces.length, matches);
+          // Write normalized per-person rows to image_tags table
+          this.db.saveImageTags(img.imageKey, matches);
         }
       } catch (err) {
         console.error(`[FaceEngine] Auto-tag failed for ${img.imageKey}:`, err);

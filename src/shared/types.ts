@@ -102,6 +102,20 @@ export interface FaceMatch {
   bbox: BoundingBox;
 }
 
+export interface ImageTagRow {
+  id: number;
+  imageKey: string;
+  personName: string;
+  confidence: number;
+  bboxX: number;
+  bboxY: number;
+  bboxW: number;
+  bboxH: number;
+  approved: number;  // 0 = auto-detected, 1 = manually approved
+  uploaded: number;  // 0 = pending, 1 = pushed to SmugMug
+  taggedAt: string;
+}
+
 export interface ImageRecord {
   id: number;
   imageKey: string;

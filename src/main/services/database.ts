@@ -10,6 +10,7 @@ import type {
   AlbumRecord,
   ImageRecord,
   FaceMatch,
+  ImageTagRow,
   DatabaseStats,
   BoundingBox,
 } from '../../shared/types';
@@ -89,6 +90,22 @@ export class DatabaseService {
       CREATE INDEX IF NOT EXISTS idx_images_faces ON images(faces_detected);
       CREATE INDEX IF NOT EXISTS idx_images_tags ON images(tags_uploaded);
       CREATE INDEX IF NOT EXISTS idx_face_descriptors_person ON face_descriptors(person_id);
+
+      CREATE TABLE IF NOT EXISTS image_tags (
+        id INTEGER PRIMARY KEY,
+        image_key TEXT NOT NULL REFERENCES images(image_key) ON DELETE CASCADE,
+        person_name TEXT NOT NULL,
+        confidence REAL,
+        bbox_x REAL, bbox_y REAL,
+        bbox_w REAL, bbox_h REAL,
+        approved INTEGER DEFAULT 0,
+        uploaded INTEGER DEFAULT 0,
+        tagged_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_image_tags_image ON image_tags(image_key);
+      CREATE INDEX IF NOT EXISTS idx_image_tags_person ON image_tags(person_name);
+      CREATE INDEX IF NOT EXISTS idx_image_tags_uploaded ON image_tags(uploaded);
     `);
   }
 
@@ -230,6 +247,10 @@ export class DatabaseService {
     this.db.prepare(`
       UPDATE images SET tags_uploaded = 1 WHERE image_key = ?
     `).run(imageKey);
+    // Also mark every tag row for this image as uploaded
+    this.db.prepare(`
+      UPDATE image_tags SET uploaded = 1 WHERE image_key = ?
+    `).run(imageKey);
   }
 
   getUntaggedImagesWithFaces(): ImageRecord[] {
@@ -298,6 +319,99 @@ export class DatabaseService {
     this.db.prepare(`
       UPDATE images SET detected_people = ? WHERE image_key = ?
     `).run(JSON.stringify(detectedPeople), imageKey);
+  }
+
+  // -----------------------------------------------------------
+  // image_tags — normalized per-person tag rows
+  // -----------------------------------------------------------
+
+  /**
+   * Atomically replace all tag rows for an image with the latest matches.
+   * Deletes old rows first so re-runs don't create duplicates.
+   */
+  saveImageTags(imageKey: string, matches: FaceMatch[]): void {
+    const deleteOld = this.db.prepare(`DELETE FROM image_tags WHERE image_key = ?`);
+    const insert = this.db.prepare(`
+      INSERT INTO image_tags (image_key, person_name, confidence, bbox_x, bbox_y, bbox_w, bbox_h)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const transaction = this.db.transaction(() => {
+      deleteOld.run(imageKey);
+      for (const m of matches) {
+        insert.run(
+          imageKey,
+          m.personName,
+          m.confidence,
+          m.bbox.x,
+          m.bbox.y,
+          m.bbox.width,
+          m.bbox.height,
+        );
+      }
+    });
+
+    transaction();
+  }
+
+  /** Approve a specific person tag on an image. */
+  approveImageTag(imageKey: string, personName: string): void {
+    this.db.prepare(`
+      UPDATE image_tags SET approved = 1
+      WHERE image_key = ? AND person_name = ?
+    `).run(imageKey, personName);
+  }
+
+  /** Mark a specific person tag on an image as uploaded to SmugMug. */
+  markTagUploaded(imageKey: string, personName: string): void {
+    this.db.prepare(`
+      UPDATE image_tags SET uploaded = 1
+      WHERE image_key = ? AND person_name = ?
+    `).run(imageKey, personName);
+  }
+
+  /** Return all images that have a tag for a given person. */
+  getImagesByPerson(personName: string): string[] {
+    const rows = this.db.prepare(`
+      SELECT DISTINCT image_key FROM image_tags WHERE person_name = ?
+    `).all(personName) as { image_key: string }[];
+    return rows.map(r => r.image_key);
+  }
+
+  /** Return all tag rows that have not yet been uploaded. */
+  getPendingUploadTags(): ImageTagRow[] {
+    return this.db.prepare(`
+      SELECT id, image_key as imageKey, person_name as personName,
+             confidence, bbox_x as bboxX, bbox_y as bboxY,
+             bbox_w as bboxW, bbox_h as bboxH,
+             approved, uploaded, tagged_at as taggedAt
+      FROM image_tags WHERE uploaded = 0
+      ORDER BY image_key, person_name
+    `).all() as ImageTagRow[];
+  }
+
+  /** Return tag rows filtered by a minimum confidence threshold. */
+  getTagsByMinConfidence(threshold: number): ImageTagRow[] {
+    return this.db.prepare(`
+      SELECT id, image_key as imageKey, person_name as personName,
+             confidence, bbox_x as bboxX, bbox_y as bboxY,
+             bbox_w as bboxW, bbox_h as bboxH,
+             approved, uploaded, tagged_at as taggedAt
+      FROM image_tags WHERE confidence >= ?
+      ORDER BY confidence DESC
+    `).all(threshold) as ImageTagRow[];
+  }
+
+  /** Return all tag rows for a single image (tag summary). */
+  getTagSummary(imageKey: string): ImageTagRow[] {
+    return this.db.prepare(`
+      SELECT id, image_key as imageKey, person_name as personName,
+             confidence, bbox_x as bboxX, bbox_y as bboxY,
+             bbox_w as bboxW, bbox_h as bboxH,
+             approved, uploaded, tagged_at as taggedAt
+      FROM image_tags WHERE image_key = ?
+      ORDER BY confidence DESC
+    `).all(imageKey) as ImageTagRow[];
   }
 
   // -----------------------------------------------------------
