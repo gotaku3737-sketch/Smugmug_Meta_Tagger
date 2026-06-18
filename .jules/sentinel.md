@@ -27,3 +27,7 @@
 **Vulnerability:** The application was missing an explicit permission request handler, which means the application might allow web content to silently access privileged APIs like geolocation, camera, or microphone if the Electron version defaults to permissive.
 **Learning:** Adding a strict default permission request handler in Electron is essential to adhere to the principle of least privilege.
 **Prevention:** Always implement `session.defaultSession.setPermissionRequestHandler` to deny unexpected permission requests by default.
+## 2025-05-21 - [Sensitive Credentials File Permissions]
+**Vulnerability:** The application was missing explicit file permissions restrictions (`mode: 0o600`) when writing sensitive OAuth API keys and tokens to disk.
+**Learning:** Even when using `safeStorage` to encrypt secrets, an attacker or other user on the same system may still be able to copy or extract the file content. Further, if the environment fallback triggers and stores plaintext secrets, overly permissive file-system controls allow direct compromise.
+**Prevention:** Always enforce strict file-system permissions (`mode: 0o600`) utilizing `fs.writeFileSync` options or `fs.chmodSync` when creating and handling sensitive credential files.
