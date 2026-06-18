@@ -108,7 +108,14 @@ export function LoginPage({ authStatus, onAuthComplete }: LoginPageProps) {
         <h2 className="page-title">Connect to SmugMug</h2>
         <p className="page-description">
           Enter your SmugMug API credentials to get started. You can get an API key at{' '}
-          <a href="https://api.smugmug.com/api/developer/apply" target="_blank" rel="noreferrer" style={{ color: 'var(--color-accent-primary)' }}>
+          <a
+            href="#"
+            onClick={(e) => {
+              e.preventDefault();
+              window.electronAPI.util.openExternal('https://api.smugmug.com/api/developer/apply');
+            }}
+            style={{ color: 'var(--color-accent-primary)', cursor: 'pointer' }}
+          >
             api.smugmug.com
           </a>
         </p>

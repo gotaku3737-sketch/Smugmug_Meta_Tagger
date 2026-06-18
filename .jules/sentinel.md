@@ -31,3 +31,13 @@
 **Vulnerability:** The application was missing explicit file permissions restrictions (`mode: 0o600`) when writing sensitive OAuth API keys and tokens to disk.
 **Learning:** Even when using `safeStorage` to encrypt secrets, an attacker or other user on the same system may still be able to copy or extract the file content. Further, if the environment fallback triggers and stores plaintext secrets, overly permissive file-system controls allow direct compromise.
 **Prevention:** Always enforce strict file-system permissions (`mode: 0o600`) utilizing `fs.writeFileSync` options or `fs.chmodSync` when creating and handling sensitive credential files.
+
+## 2026-06-18 - [Target="_blank" Implicit Navigation Bypass]
+**Vulnerability:** External links using `<a target="_blank">` without explicitly calling `window.electronAPI.util.openExternal` relied on the default `window.open` behavior. While somewhat mitigated by the main process interceptor, this bypassed explicit IPC validation boundaries and violated the required pattern for handling external URLs safely.
+**Learning:** In Electron applications, implicit browser behaviors like `target="_blank"` should not be relied upon for security validation. All external navigation must be explicitly intercepted and handled via strict IPC calls.
+**Prevention:** Replace `<a target="_blank">` usage with `onClick` handlers that explicitly invoke `window.electronAPI.util.openExternal` to ensure uniform security boundaries.
+
+## 2026-06-18 - [Stack Trace Leakage over IPC]
+**Vulnerability:** IPC handlers (e.g., `faces:detectInAlbum`, `tags:runAutoTagger`) threw internal server `Error` objects directly back to the renderer process. Serialized Error objects include full stack traces, which could expose internal file paths or system architecture.
+**Learning:** Sending raw `Error` objects across the IPC boundary violates the principle of failing securely. It can leak sensitive backend details to the potentially lower-privileged renderer environment.
+**Prevention:** Catch errors in the main process, log them securely on the server side, and throw generic error messages (e.g., `throw new Error('Operation failed')`) to the renderer.
