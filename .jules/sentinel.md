@@ -31,3 +31,8 @@
 **Vulnerability:** The application was missing explicit file permissions restrictions (`mode: 0o600`) when writing sensitive OAuth API keys and tokens to disk.
 **Learning:** Even when using `safeStorage` to encrypt secrets, an attacker or other user on the same system may still be able to copy or extract the file content. Further, if the environment fallback triggers and stores plaintext secrets, overly permissive file-system controls allow direct compromise.
 **Prevention:** Always enforce strict file-system permissions (`mode: 0o600`) utilizing `fs.writeFileSync` options or `fs.chmodSync` when creating and handling sensitive credential files.
+
+## 2024-05-15 - [Secure Error Handling]
+**Vulnerability:** IPC Handlers leaking raw error objects containing possible stack traces to renderer process.
+**Learning:** Returning unhandled raw errors out of Electron main process directly to renderer exposes details about application internals, backend environment, or file paths.
+**Prevention:** Wrap raw errors internally by logging them via console.error, but throw generic `Error` instances containing a sanitized string back to renderer when exceptions occur.
