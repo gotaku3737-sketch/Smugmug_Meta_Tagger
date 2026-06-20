@@ -118,7 +118,7 @@ export function registerIpcHandlers(services: Services): void {
       await faceEngine.detectInAlbum(albumKey);
     } catch (err) {
       console.error('[IPC] faces:detectInAlbum error:', err);
-      throw new Error('Failed to detect faces in album');
+      throw new Error('An error occurred during face detection.');
     }
   });
 
@@ -165,7 +165,7 @@ export function registerIpcHandlers(services: Services): void {
       await faceEngine.runAutoTagger();
     } catch (err) {
       console.error('[IPC] tags:runAutoTagger error:', err);
-      throw new Error('Auto-tagger operation failed');
+      throw new Error('An error occurred during auto-tagging.');
     }
   });
 
