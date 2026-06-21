@@ -33,11 +33,21 @@ export function registerIpcHandlers(services: Services): void {
   });
 
   ipcMain.handle('smugmug:startAuth', async () => {
-    return oauth.startAuth();
+    try {
+      return await oauth.startAuth();
+    } catch (err) {
+      console.error('[IPC] smugmug:startAuth error:', err);
+      throw new Error('An error occurred during authentication.');
+    }
   });
 
   ipcMain.handle('smugmug:completeAuth', async (_event, verifier: string) => {
-    return oauth.completeAuth(verifier);
+    try {
+      return await oauth.completeAuth(verifier);
+    } catch (err) {
+      console.error('[IPC] smugmug:completeAuth error:', err);
+      throw new Error('An error occurred during authentication completion.');
+    }
   });
 
   ipcMain.handle('smugmug:getAuthStatus', async () => {
@@ -53,11 +63,16 @@ export function registerIpcHandlers(services: Services): void {
   // -----------------------------------------------------------
 
   ipcMain.handle('albums:sync', async () => {
-    const albums = await api.getAlbums();
-    for (const album of albums) {
-      db.upsertAlbum(album.albumKey, album.title, album.imageCount, album.coverImageUrl);
+    try {
+      const albums = await api.getAlbums();
+      for (const album of albums) {
+        db.upsertAlbum(album.albumKey, album.title, album.imageCount, album.coverImageUrl);
+      }
+      return db.getAllAlbums();
+    } catch (err) {
+      console.error('[IPC] albums:sync error:', err);
+      throw new Error('An error occurred during album synchronization.');
     }
-    return db.getAllAlbums();
   });
 
   ipcMain.handle('albums:getAll', async () => {
@@ -65,23 +80,28 @@ export function registerIpcHandlers(services: Services): void {
   });
 
   ipcMain.handle('albums:getImages', async (_event, albumKey: string) => {
-    // Sync images from SmugMug if we haven't stored them yet
-    const existing = db.getImagesByAlbum(albumKey);
-    if (existing.length === 0) {
-      const images = await api.getAlbumImages(albumKey);
-      for (const img of images) {
-        db.upsertImage(
-          img.imageKey,
-          img.albumKey,
-          img.filename,
-          img.thumbUrl,
-          img.mediumUrl,
-          img.originalUrl,
-          img.keywords
-        );
+    try {
+      // Sync images from SmugMug if we haven't stored them yet
+      const existing = db.getImagesByAlbum(albumKey);
+      if (existing.length === 0) {
+        const images = await api.getAlbumImages(albumKey);
+        for (const img of images) {
+          db.upsertImage(
+            img.imageKey,
+            img.albumKey,
+            img.filename,
+            img.thumbUrl,
+            img.mediumUrl,
+            img.originalUrl,
+            img.keywords
+          );
+        }
       }
+      return db.getImagesByAlbum(albumKey);
+    } catch (err) {
+      console.error('[IPC] albums:getImages error:', err);
+      throw new Error('An error occurred while fetching album images.');
     }
-    return db.getImagesByAlbum(albumKey);
   });
 
   // -----------------------------------------------------------
@@ -89,19 +109,29 @@ export function registerIpcHandlers(services: Services): void {
   // -----------------------------------------------------------
 
   ipcMain.handle('photos:downloadThumbnails', async (event, albumKey: string) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    downloader.onProgress((progress) => {
-      win?.webContents.send('photos:downloadProgress', progress);
-    });
-    await downloader.downloadThumbnails(albumKey);
+    try {
+      const win = BrowserWindow.fromWebContents(event.sender);
+      downloader.onProgress((progress) => {
+        win?.webContents.send('photos:downloadProgress', progress);
+      });
+      await downloader.downloadThumbnails(albumKey);
+    } catch (err) {
+      console.error('[IPC] photos:downloadThumbnails error:', err);
+      throw new Error('An error occurred while downloading thumbnails.');
+    }
   });
 
   ipcMain.handle('photos:downloadMedium', async (event, albumKey: string) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    downloader.onProgress((progress) => {
-      win?.webContents.send('photos:downloadProgress', progress);
-    });
-    await downloader.downloadMedium(albumKey);
+    try {
+      const win = BrowserWindow.fromWebContents(event.sender);
+      downloader.onProgress((progress) => {
+        win?.webContents.send('photos:downloadProgress', progress);
+      });
+      await downloader.downloadMedium(albumKey);
+    } catch (err) {
+      console.error('[IPC] photos:downloadMedium error:', err);
+      throw new Error('An error occurred while downloading medium-res images.');
+    }
   });
 
   // -----------------------------------------------------------
