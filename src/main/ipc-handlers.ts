@@ -76,7 +76,6 @@ export function registerIpcHandlers(services: Services): void {
     for (const album of albums) {
       db.upsertAlbum(album.albumKey, album.title, album.imageCount, album.coverImageUrl);
     }
-    return db.getAllAlbums();
   });
 
   safeHandle('albums:getAll', async () => {
@@ -99,8 +98,11 @@ export function registerIpcHandlers(services: Services): void {
           img.keywords
         );
       }
+      return db.getImagesByAlbum(albumKey);
+    } catch (err) {
+      console.error('[IPC] albums:getImages error:', err);
+      throw new Error('An error occurred while fetching album images.');
     }
-    return db.getImagesByAlbum(albumKey);
   });
 
   // -----------------------------------------------------------
