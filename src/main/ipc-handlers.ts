@@ -24,37 +24,46 @@ interface Services {
 export function registerIpcHandlers(services: Services): void {
   const { oauth, api, db, downloader, faceEngine, settings, onSettingsUpdate } = services;
 
+
+
+
+
+  // Security: Wrap all IPC handlers to prevent leaking stack traces or sensitive details
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const safeHandle = (channel: string, listener: (event: Electron.IpcMainInvokeEvent, ...args: any[]) => any) => {
+    ipcMain.handle(channel, async (event, ...args) => {
+      try {
+        return await listener(event, ...args);
+      } catch (err) {
+        console.error(`[IPC Error] ${channel}:`, err);
+        throw new Error('An internal error occurred');
+      }
+    });
+  };
+
   // -----------------------------------------------------------
   // OAuth / SmugMug Auth
+
+
   // -----------------------------------------------------------
 
-  ipcMain.handle('smugmug:setCredentials', async (_event, consumerKey: string, consumerSecret: string) => {
+  safeHandle('smugmug:setCredentials', async (_event, consumerKey: string, consumerSecret: string) => {
     oauth.setCredentials(consumerKey, consumerSecret);
   });
 
-  ipcMain.handle('smugmug:startAuth', async () => {
-    try {
-      return await oauth.startAuth();
-    } catch (err) {
-      console.error('[IPC] smugmug:startAuth error:', err);
-      throw new Error('An error occurred during authentication.');
-    }
+  safeHandle('smugmug:startAuth', async () => {
+    return oauth.startAuth();
   });
 
-  ipcMain.handle('smugmug:completeAuth', async (_event, verifier: string) => {
-    try {
-      return await oauth.completeAuth(verifier);
-    } catch (err) {
-      console.error('[IPC] smugmug:completeAuth error:', err);
-      throw new Error('An error occurred during authentication completion.');
-    }
+  safeHandle('smugmug:completeAuth', async (_event, verifier: string) => {
+    return oauth.completeAuth(verifier);
   });
 
-  ipcMain.handle('smugmug:getAuthStatus', async () => {
+  safeHandle('smugmug:getAuthStatus', async () => {
     return oauth.getAuthStatus();
   });
 
-  ipcMain.handle('smugmug:disconnect', async () => {
+  safeHandle('smugmug:disconnect', async () => {
     oauth.disconnect();
   });
 
@@ -62,40 +71,32 @@ export function registerIpcHandlers(services: Services): void {
   // Albums & Images
   // -----------------------------------------------------------
 
-  ipcMain.handle('albums:sync', async () => {
-    try {
-      const albums = await api.getAlbums();
-      for (const album of albums) {
-        db.upsertAlbum(album.albumKey, album.title, album.imageCount, album.coverImageUrl);
-      }
-      return db.getAllAlbums();
-    } catch (err) {
-      console.error('[IPC] albums:sync error:', err);
-      throw new Error('An error occurred during album synchronization.');
+  safeHandle('albums:sync', async () => {
+    const albums = await api.getAlbums();
+    for (const album of albums) {
+      db.upsertAlbum(album.albumKey, album.title, album.imageCount, album.coverImageUrl);
     }
   });
 
-  ipcMain.handle('albums:getAll', async () => {
+  safeHandle('albums:getAll', async () => {
     return db.getAllAlbums();
   });
 
-  ipcMain.handle('albums:getImages', async (_event, albumKey: string) => {
-    try {
-      // Sync images from SmugMug if we haven't stored them yet
-      const existing = db.getImagesByAlbum(albumKey);
-      if (existing.length === 0) {
-        const images = await api.getAlbumImages(albumKey);
-        for (const img of images) {
-          db.upsertImage(
-            img.imageKey,
-            img.albumKey,
-            img.filename,
-            img.thumbUrl,
-            img.mediumUrl,
-            img.originalUrl,
-            img.keywords
-          );
-        }
+  safeHandle('albums:getImages', async (_event, albumKey: string) => {
+    // Sync images from SmugMug if we haven't stored them yet
+    const existing = db.getImagesByAlbum(albumKey);
+    if (existing.length === 0) {
+      const images = await api.getAlbumImages(albumKey);
+      for (const img of images) {
+        db.upsertImage(
+          img.imageKey,
+          img.albumKey,
+          img.filename,
+          img.thumbUrl,
+          img.mediumUrl,
+          img.originalUrl,
+          img.keywords
+        );
       }
       return db.getImagesByAlbum(albumKey);
     } catch (err) {
@@ -108,37 +109,27 @@ export function registerIpcHandlers(services: Services): void {
   // Downloads
   // -----------------------------------------------------------
 
-  ipcMain.handle('photos:downloadThumbnails', async (event, albumKey: string) => {
-    try {
-      const win = BrowserWindow.fromWebContents(event.sender);
-      downloader.onProgress((progress) => {
-        win?.webContents.send('photos:downloadProgress', progress);
-      });
-      await downloader.downloadThumbnails(albumKey);
-    } catch (err) {
-      console.error('[IPC] photos:downloadThumbnails error:', err);
-      throw new Error('An error occurred while downloading thumbnails.');
-    }
+  safeHandle('photos:downloadThumbnails', async (event, albumKey: string) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    downloader.onProgress((progress) => {
+      win?.webContents.send('photos:downloadProgress', progress);
+    });
+    await downloader.downloadThumbnails(albumKey);
   });
 
-  ipcMain.handle('photos:downloadMedium', async (event, albumKey: string) => {
-    try {
-      const win = BrowserWindow.fromWebContents(event.sender);
-      downloader.onProgress((progress) => {
-        win?.webContents.send('photos:downloadProgress', progress);
-      });
-      await downloader.downloadMedium(albumKey);
-    } catch (err) {
-      console.error('[IPC] photos:downloadMedium error:', err);
-      throw new Error('An error occurred while downloading medium-res images.');
-    }
+  safeHandle('photos:downloadMedium', async (event, albumKey: string) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    downloader.onProgress((progress) => {
+      win?.webContents.send('photos:downloadProgress', progress);
+    });
+    await downloader.downloadMedium(albumKey);
   });
 
   // -----------------------------------------------------------
   // Face Detection & Training
   // -----------------------------------------------------------
 
-  ipcMain.handle('faces:detectInAlbum', async (event, albumKey: string) => {
+  safeHandle('faces:detectInAlbum', async (event, albumKey: string) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     faceEngine.onProgress((progress) => {
       win?.webContents.send('faces:detectionProgress', progress);
@@ -152,15 +143,15 @@ export function registerIpcHandlers(services: Services): void {
     }
   });
 
-  ipcMain.handle('faces:getPeople', async () => {
+  safeHandle('faces:getPeople', async () => {
     return db.getAllPeople();
   });
 
-  ipcMain.handle('faces:deletePerson', async (_event, personId: number) => {
+  safeHandle('faces:deletePerson', async (_event, personId: number) => {
     db.deletePerson(personId);
   });
 
-  ipcMain.handle('faces:trainFace', async (
+  safeHandle('faces:trainFace', async (
     _event,
     imageKey: string,
     bbox: BoundingBox,
@@ -190,7 +181,7 @@ export function registerIpcHandlers(services: Services): void {
   // Auto-Tagger
   // -----------------------------------------------------------
 
-  ipcMain.handle('tags:runAutoTagger', async () => {
+  safeHandle('tags:runAutoTagger', async () => {
     try {
       await faceEngine.runAutoTagger();
     } catch (err) {
@@ -199,15 +190,15 @@ export function registerIpcHandlers(services: Services): void {
     }
   });
 
-  ipcMain.handle('tags:getUntaggedResults', async () => {
+  safeHandle('tags:getUntaggedResults', async () => {
     return db.getUntaggedImagesWithFaces();
   });
 
-  ipcMain.handle('tags:approveMatches', async (_event, imageKey: string, approvedNames: string[]) => {
+  safeHandle('tags:approveMatches', async (_event, imageKey: string, approvedNames: string[]) => {
     faceEngine.approveMatches(imageKey, approvedNames);
   });
 
-  ipcMain.handle('tags:uploadTags', async (event, imageKeys: string[]) => {
+  safeHandle('tags:uploadTags', async (event, imageKeys: string[]) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     let completed = 0;
 
@@ -242,11 +233,11 @@ export function registerIpcHandlers(services: Services): void {
   // Settings & Stats
   // -----------------------------------------------------------
 
-  ipcMain.handle('settings:get', async () => {
+  safeHandle('settings:get', async () => {
     return settings;
   });
 
-  ipcMain.handle('settings:update', async (_event, partial: Partial<AppSettings>) => {
+  safeHandle('settings:update', async (_event, partial: Partial<AppSettings>) => {
     onSettingsUpdate(partial);
 
     // Apply live settings changes
@@ -255,15 +246,15 @@ export function registerIpcHandlers(services: Services): void {
     }
   });
 
-  ipcMain.handle('settings:getStats', async () => {
+  safeHandle('settings:getStats', async () => {
     return db.getStats();
   });
 
-  ipcMain.handle('settings:clearTrainingData', async () => {
+  safeHandle('settings:clearTrainingData', async () => {
     db.clearTrainingData();
   });
 
-  ipcMain.handle('settings:resetDatabase', async () => {
+  safeHandle('settings:resetDatabase', async () => {
     db.resetDatabase();
   });
 
@@ -271,7 +262,7 @@ export function registerIpcHandlers(services: Services): void {
   // Utils
   // -----------------------------------------------------------
 
-  ipcMain.handle('util:openExternal', async (_event, url: string) => {
+  safeHandle('util:openExternal', async (_event, url: string) => {
     try {
       const parsedUrl = new URL(url);
       if (['http:', 'https:', 'mailto:'].includes(parsedUrl.protocol)) {
