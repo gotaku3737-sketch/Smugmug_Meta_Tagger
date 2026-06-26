@@ -36,3 +36,7 @@
 **Vulnerability:** IPC handlers in the main process (`faces:detectInAlbum` and `tags:runAutoTagger`) were re-throwing original error objects across the IPC bridge to the renderer process. This could potentially leak sensitive internal application state or stack traces to the frontend environment.
 **Learning:** Raw errors thrown across an IPC bridge can bypass security boundaries by exposing internal error messages or stack traces that attackers might use to understand the system's inner workings.
 **Prevention:** Ensure that errors thrown over the IPC bridge from the main process to the renderer are caught and replaced with generic, secure error messages. Raw errors should be logged in the main process (`console.error`) but masked before crossing the trust boundary.
+## 2024-05-18 - [Secure IPC Error Handling]
+**Vulnerability:** IPC handlers potentially leaking stack traces and sensitive server-side details to the renderer process when errors occur.
+**Learning:** In Electron, errors thrown in `ipcMain.handle` are directly passed back to the renderer (`ipcRenderer.invoke`). This can expose backend implementation details, file paths, and database query structures.
+**Prevention:** Always wrap IPC handlers in a generic error boundary that logs the detailed error on the backend (Main Process) but only returns a safe, sanitized message (e.g., 'An internal error occurred') to the frontend.
