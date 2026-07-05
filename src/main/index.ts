@@ -52,7 +52,13 @@ function loadSettings(): AppSettings {
 function saveSettings(settings: AppSettings): void {
   try {
     if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+    // Security: Restrict file permissions to owner read/write (0o600)
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), { encoding: 'utf-8', mode: 0o600 });
+    try {
+      fs.chmodSync(settingsPath, 0o600);
+    } catch (chmodErr) {
+      // Ignore chmod errors on systems that don't support it (e.g., Windows)
+    }
   } catch (err) {
     console.error('[Settings] Failed to save:', err);
   }

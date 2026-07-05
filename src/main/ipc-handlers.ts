@@ -86,23 +86,26 @@ export function registerIpcHandlers(services: Services): void {
     // Sync images from SmugMug if we haven't stored them yet
     const existing = db.getImagesByAlbum(albumKey);
     if (existing.length === 0) {
-      const images = await api.getAlbumImages(albumKey);
-      for (const img of images) {
-        db.upsertImage(
-          img.imageKey,
-          img.albumKey,
-          img.filename,
-          img.thumbUrl,
-          img.mediumUrl,
-          img.originalUrl,
-          img.keywords
-        );
+      try {
+        const images = await api.getAlbumImages(albumKey);
+        for (const img of images) {
+          db.upsertImage(
+            img.imageKey,
+            img.albumKey,
+            img.filename,
+            img.thumbUrl,
+            img.mediumUrl,
+            img.originalUrl,
+            img.keywords
+          );
+        }
+        return db.getImagesByAlbum(albumKey);
+      } catch (err) {
+        console.error('[IPC] albums:getImages error:', err);
+        throw new Error('An error occurred while fetching album images.');
       }
-      return db.getImagesByAlbum(albumKey);
-    } catch (err) {
-      console.error('[IPC] albums:getImages error:', err);
-      throw new Error('An error occurred while fetching album images.');
     }
+    return existing;
   });
 
   // -----------------------------------------------------------
