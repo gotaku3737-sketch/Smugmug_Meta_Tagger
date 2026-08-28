@@ -40,3 +40,8 @@
 **Vulnerability:** IPC handlers potentially leaking stack traces and sensitive server-side details to the renderer process when errors occur.
 **Learning:** In Electron, errors thrown in `ipcMain.handle` are directly passed back to the renderer (`ipcRenderer.invoke`). This can expose backend implementation details, file paths, and database query structures.
 **Prevention:** Always wrap IPC handlers in a generic error boundary that logs the detailed error on the backend (Main Process) but only returns a safe, sanitized message (e.g., 'An internal error occurred') to the frontend.
+
+## 2024-11-26 - [Settings File Permissions]
+**Vulnerability:** The application was missing explicit file permissions restrictions (`mode: 0o600`) when writing settings file.
+**Learning:** Even for non-credentials file, it is a good practice to explicitly define file permission limits, such as `mode: 0o600`, acting as an additional layer of defense.
+**Prevention:** Always enforce strict file-system permissions (`mode: 0o600`) utilizing `fs.writeFileSync` options or `fs.chmodSync` when creating and handling any sensitive files.
