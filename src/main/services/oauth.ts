@@ -231,6 +231,7 @@ export class OAuthService {
           path: parsedUrl.pathname + parsedUrl.search,
           method: 'GET',
           headers: redirectCount === 0 ? headers : {}, // Only sign the first request
+          timeout: 15000, // Security Enhancement: Add timeout to prevent hang
         };
 
         const req = https.request(options, (res) => {
@@ -260,6 +261,9 @@ export class OAuthService {
         });
 
         req.on('error', reject);
+        req.on('timeout', () => {
+          req.destroy(new Error('Request timed out'));
+        });
         req.end();
       };
 
@@ -321,6 +325,7 @@ export class OAuthService {
         path: parsedUrl.pathname + parsedUrl.search,
         method,
         headers,
+        timeout: 15000, // Security Enhancement: Add timeout to prevent hang
       };
 
       const req = https.request(options, (res) => {
@@ -338,6 +343,9 @@ export class OAuthService {
       });
 
       req.on('error', reject);
+      req.on('timeout', () => {
+        req.destroy(new Error('Request timed out'));
+      });
 
       if (body) {
         req.write(body);
