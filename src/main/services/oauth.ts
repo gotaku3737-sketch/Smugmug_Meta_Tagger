@@ -231,6 +231,7 @@ export class OAuthService {
           path: parsedUrl.pathname + parsedUrl.search,
           method: 'GET',
           headers: redirectCount === 0 ? headers : {}, // Only sign the first request
+          timeout: 30000,
         };
 
         const req = https.request(options, (res) => {
@@ -259,6 +260,10 @@ export class OAuthService {
           fileStream.on('error', reject);
         });
 
+        req.on('timeout', () => {
+          req.destroy();
+          reject(new Error('Request timed out'));
+        });
         req.on('error', reject);
         req.end();
       };
@@ -321,6 +326,7 @@ export class OAuthService {
         path: parsedUrl.pathname + parsedUrl.search,
         method,
         headers,
+        timeout: 30000,
       };
 
       const req = https.request(options, (res) => {
@@ -337,6 +343,10 @@ export class OAuthService {
         });
       });
 
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Request timed out'));
+      });
       req.on('error', reject);
 
       if (body) {

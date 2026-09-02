@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { formatPersonKeyword, parsePersonKeywords, mergeKeywords } from './types.ts';
+import { formatPersonKeyword, parsePersonKeywords, mergeKeywords } from './types';
 
 describe('Keyword Helpers', () => {
   test('formatPersonKeyword should add PERSON_PREFIX to name', () => {
