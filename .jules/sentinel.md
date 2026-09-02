@@ -45,3 +45,8 @@
 **Vulnerability:** The application was missing explicit file permissions restrictions (`mode: 0o600`) when writing settings file.
 **Learning:** Even for non-credentials file, it is a good practice to explicitly define file permission limits, such as `mode: 0o600`, acting as an additional layer of defense.
 **Prevention:** Always enforce strict file-system permissions (`mode: 0o600`) utilizing `fs.writeFileSync` options or `fs.chmodSync` when creating and handling any sensitive files.
+
+## 2026-05-22 - [Resource Exhaustion via Missing Timeouts]
+**Vulnerability:** External API requests using Node's `https` module (in `oauth.ts`) did not specify a `timeout` option and did not handle the `timeout` event. This could lead to request hanging indefinitely if the external server is unresponsive, causing resource exhaustion.
+**Learning:** Always specify a `timeout` option for external network requests and handle the `timeout` event properly (e.g., by calling `req.destroy()`) to prevent resource exhaustion and hanging requests.
+**Prevention:** Include a `timeout` option in `https.request` configuration and listen for the `timeout` event to proactively terminate the request.
