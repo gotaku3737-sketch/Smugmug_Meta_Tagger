@@ -265,6 +265,9 @@ export class OAuthService {
           reject(new Error('Request timed out'));
         });
         req.on('error', reject);
+        req.on('timeout', () => {
+          req.destroy(new Error('Request timed out'));
+        });
         req.end();
       };
 
@@ -348,6 +351,9 @@ export class OAuthService {
         reject(new Error('Request timed out'));
       });
       req.on('error', reject);
+      req.on('timeout', () => {
+        req.destroy(new Error('Request timed out'));
+      });
 
       if (body) {
         req.write(body);
