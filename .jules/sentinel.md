@@ -50,3 +50,7 @@
 **Vulnerability:** External API requests using Node's `https` module (in `oauth.ts`) did not specify a `timeout` option and did not handle the `timeout` event. This could lead to request hanging indefinitely if the external server is unresponsive, causing resource exhaustion.
 **Learning:** Always specify a `timeout` option for external network requests and handle the `timeout` event properly (e.g., by calling `req.destroy()`) to prevent resource exhaustion and hanging requests.
 **Prevention:** Include a `timeout` option in `https.request` configuration and listen for the `timeout` event to proactively terminate the request.
+## 2024-05-18 - [IPC Audit Logging]
+**Vulnerability:** Missing logging on sensitive application state transitions
+**Learning:** Adding IPC handler wrapping allows to transparently log invocations of sensitive endpoints
+**Prevention:** Implement audit trails on the system boundary (IPC layer)
