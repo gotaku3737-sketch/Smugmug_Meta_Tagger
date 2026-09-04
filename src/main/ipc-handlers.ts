@@ -28,10 +28,24 @@ export function registerIpcHandlers(services: Services): void {
 
 
 
+  const sensitiveChannels = [
+    'smugmug:setCredentials',
+    'smugmug:completeAuth',
+    'smugmug:disconnect',
+    'settings:update',
+    'settings:clearTrainingData',
+    'settings:resetDatabase',
+    'faces:deletePerson'
+  ];
+
   // Security: Wrap all IPC handlers to prevent leaking stack traces or sensitive details
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const safeHandle = (channel: string, listener: (event: Electron.IpcMainInvokeEvent, ...args: any[]) => any) => {
     ipcMain.handle(channel, async (event, ...args) => {
+      if (sensitiveChannels.includes(channel)) {
+        console.log(`[Security Audit] Sensitive IPC channel invoked: ${channel}`);
+      }
+
       try {
         return await listener(event, ...args);
       } catch (err) {
