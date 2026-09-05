@@ -181,6 +181,19 @@ app.on('ready', () => {
     callback(false);
   });
 
+  // Security: Add strict Content-Security-Policy and other security headers to all responses
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': ["default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https: file:; connect-src 'self' https:;"],
+        'X-Content-Type-Options': ['nosniff'],
+        'X-Frame-Options': ['DENY'],
+        'X-XSS-Protection': ['1; mode=block'],
+      },
+    });
+  });
+
   initializeServices();
   createWindow();
 });
