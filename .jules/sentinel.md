@@ -54,3 +54,8 @@
 **Vulnerability:** Missing logging on sensitive application state transitions
 **Learning:** Adding IPC handler wrapping allows to transparently log invocations of sensitive endpoints
 **Prevention:** Implement audit trails on the system boundary (IPC layer)
+
+## 2025-05-24 - [Missing Global Security Headers]
+**Vulnerability:** The application was missing global security headers (like Content-Security-Policy, X-Frame-Options, X-Content-Type-Options) applied via Electron's `webRequest.onHeadersReceived`, leaving webviews potentially exposed to framing, MIME-sniffing, and XSS if an attacker controls loaded content.
+**Learning:** While HTML-level `<meta>` CSP tags provide some protection, intercepting headers directly in Electron's network stack ensures strict defense-in-depth policies apply universally to all requested resources and windows.
+**Prevention:** Always implement `session.defaultSession.webRequest.onHeadersReceived` to globally inject strict security headers (e.g., CSP, `nosniff`, `DENY`) for all Electron browser windows.
