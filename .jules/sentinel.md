@@ -59,3 +59,8 @@
 **Vulnerability:** The application was missing global security headers (like Content-Security-Policy, X-Frame-Options, X-Content-Type-Options) applied via Electron's `webRequest.onHeadersReceived`, leaving webviews potentially exposed to framing, MIME-sniffing, and XSS if an attacker controls loaded content.
 **Learning:** While HTML-level `<meta>` CSP tags provide some protection, intercepting headers directly in Electron's network stack ensures strict defense-in-depth policies apply universally to all requested resources and windows.
 **Prevention:** Always implement `session.defaultSession.webRequest.onHeadersReceived` to globally inject strict security headers (e.g., CSP, `nosniff`, `DENY`) for all Electron browser windows.
+
+## 2026-05-25 - [SSRF and URL Injection via API Client]
+**Vulnerability:** In `src/main/services/smugmug-api.ts`, dynamic path parameters like `nickname`, `albumKey`, and `imageKey` were interpolated directly into API URL strings without URL encoding.
+**Learning:** Failing to URL encode dynamic path parameters allows an attacker (or external system) to inject special characters (like `?`, `&`, `#`, or `/`) into the path, potentially altering the intended API endpoint structure leading to SSRF or data exfiltration.
+**Prevention:** Always use `encodeURIComponent` when interpolating variables into URL paths or queries.

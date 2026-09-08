@@ -85,7 +85,7 @@ export class SmugMugAPI {
     while (hasMore) {
       const data = await this.requestWithRetry(() =>
         this.oauth.signedGet(
-          `${API_BASE}/api/v2/user/${nickname}!albums?start=${start}&count=${count}&_expand=HighlightImage`
+          `${API_BASE}/api/v2/user/${encodeURIComponent(nickname)}!albums?start=${start}&count=${count}&_expand=HighlightImage`
         )
       ) as {
         Response: {
@@ -131,7 +131,7 @@ export class SmugMugAPI {
     while (hasMore) {
       const data = await this.requestWithRetry(() =>
         this.oauth.signedGet(
-          `${API_BASE}/api/v2/album/${albumKey}!images?start=${start}&count=${count}&_expand=ImageSizeDetails`
+          `${API_BASE}/api/v2/album/${encodeURIComponent(albumKey)}!images?start=${start}&count=${count}&_expand=ImageSizeDetails`
         )
       ) as {
         Response: {
@@ -187,7 +187,7 @@ export class SmugMugAPI {
     let sizesUri = img.Uris?.ImageSizeDetails?.Uri || img.Uris?.ImageSizes?.Uri;
 
     if (!sizesUri) {
-      sizesUri = `/api/v2/image/${img.ImageKey}!sizedetails`;
+      sizesUri = `/api/v2/image/${encodeURIComponent(img.ImageKey)}!sizedetails`;
     }
 
     try {
@@ -240,7 +240,7 @@ export class SmugMugAPI {
   async updateImageKeywords(imageKey: string, keywords: string): Promise<void> {
     await this.requestWithRetry(() =>
       this.oauth.signedPatch(
-        `${API_BASE}/api/v2/image/${imageKey}`,
+        `${API_BASE}/api/v2/image/${encodeURIComponent(imageKey)}`,
         { Keywords: keywords }
       )
     );
