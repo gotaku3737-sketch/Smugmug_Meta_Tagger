@@ -64,3 +64,8 @@
 **Vulnerability:** In `src/main/services/smugmug-api.ts`, dynamic path parameters like `nickname`, `albumKey`, and `imageKey` were interpolated directly into API URL strings without URL encoding.
 **Learning:** Failing to URL encode dynamic path parameters allows an attacker (or external system) to inject special characters (like `?`, `&`, `#`, or `/`) into the path, potentially altering the intended API endpoint structure leading to SSRF or data exfiltration.
 **Prevention:** Always use `encodeURIComponent` when interpolating variables into URL paths or queries.
+
+## 2026-05-27 - [SQLite WAL Mode File Permissions]
+**Vulnerability:** The application was missing explicit file/directory permission restrictions (`mode: 0o700`) for the SQLite database when created in `src/main/services/database.ts`. Since the database uses Write-Ahead Logging (WAL) mode, SQLite dynamically creates and deletes `-wal` and `-shm` files. These temporary files contain uncommitted sensitive data and default to insecure system permissions if the parent directory isn't protected.
+**Learning:** For databases or systems that dynamically manage auxiliary files (like SQLite in WAL mode), trying to `chmod` the individual files is insecure and ineffective because they can be deleted and recreated at any time with default permissions.
+**Prevention:** Always enforce strict permissions (`mode: 0o700`) on the *parent directory* holding the database files (e.g., using `fs.mkdirSync(dbDir, { mode: 0o700 })`), so that any dynamically created child files inherit the directory's read/write boundaries, preventing unauthorized access by other local users.
