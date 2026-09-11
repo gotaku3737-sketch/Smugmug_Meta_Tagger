@@ -21,11 +21,22 @@ export class DatabaseService {
   constructor(dataDir: string) {
     const dbDir = dataDir;
     if (!fs.existsSync(dbDir)) {
-      fs.mkdirSync(dbDir, { recursive: true });
+      fs.mkdirSync(dbDir, { recursive: true, mode: 0o700 });
+    } else {
+      try {
+        fs.chmodSync(dbDir, 0o700);
+      } catch (e) {
+        // Ignore chmod errors on systems that don't support it
+      }
     }
 
     const dbPath = path.join(dbDir, 'smugmug_tagger.db');
     this.db = new Database(dbPath);
+    try {
+      fs.chmodSync(dbPath, 0o600);
+    } catch (e) {
+      // Ignore chmod errors on systems that don't support it
+    }
 
     // Enable WAL mode for better concurrent read performance
     this.db.pragma('journal_mode = WAL');

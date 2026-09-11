@@ -51,7 +51,15 @@ function loadSettings(): AppSettings {
 
 function saveSettings(settings: AppSettings): void {
   try {
-    if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+    } else {
+      try {
+        fs.chmodSync(dataDir, 0o700);
+      } catch (e) {
+        // Ignore chmod errors on systems that don't support it
+      }
+    }
     // Security: Restrict file permissions to owner read/write (0o600)
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), { encoding: 'utf-8', mode: 0o600 });
     try {
