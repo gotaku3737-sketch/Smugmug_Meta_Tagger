@@ -174,7 +174,13 @@ async function downloadWithRetry(
 
 function ensureDir(dir: string): void {
   if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  } else {
+    try {
+      fs.chmodSync(dir, 0o700);
+    } catch (e) {
+      // Ignore chmod errors on systems that don't support it
+    }
   }
 }
 
