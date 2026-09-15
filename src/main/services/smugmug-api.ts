@@ -191,8 +191,13 @@ export class SmugMugAPI {
     }
 
     try {
+      const resolvedUrl = new URL(sizesUri, API_BASE);
+      if (resolvedUrl.hostname !== 'api.smugmug.com') {
+        throw new Error(`Invalid API URL hostname: ${resolvedUrl.hostname}`);
+      }
+
       const data = await this.requestWithRetry(() =>
-        this.oauth.signedGet(`${API_BASE}${sizesUri}`)
+        this.oauth.signedGet(resolvedUrl.href)
       ) as {
         Response: {
           ImageSizeDetails?: Record<string, { Url: string; Width: number; Height: number }>;
