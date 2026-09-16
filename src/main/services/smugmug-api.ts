@@ -191,8 +191,14 @@ export class SmugMugAPI {
     }
 
     try {
+      const parsedUrl = new URL(sizesUri, API_BASE);
+      if (parsedUrl.hostname !== 'api.smugmug.com') {
+        console.warn(`[Security] Blocked SSRF attempt in getImageSizes: invalid hostname ${parsedUrl.hostname}`);
+        throw new Error('Invalid API hostname');
+      }
+
       const data = await this.requestWithRetry(() =>
-        this.oauth.signedGet(`${API_BASE}${sizesUri}`)
+        this.oauth.signedGet(parsedUrl.href)
       ) as {
         Response: {
           ImageSizeDetails?: Record<string, { Url: string; Width: number; Height: number }>;
