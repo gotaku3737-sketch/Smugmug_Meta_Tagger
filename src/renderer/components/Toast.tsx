@@ -35,7 +35,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     type: ToastType = 'info',
     duration = 4000
   ) => {
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const id = window.crypto.randomUUID();
     const toast: Toast = { id, type, message, duration };
 
     setToasts(prev => [...prev.slice(-4), toast]); // Max 5 visible at once
