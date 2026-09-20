@@ -78,3 +78,8 @@
 **Vulnerability:** SmugMug API sizes endpoint URI returned from the API (`sizesUri`) was being blindly appended to the API base URL (`${API_BASE}${sizesUri}`). If `sizesUri` started with `//` or `@`, it could allow an attacker to inject a different hostname and cause a Server-Side Request Forgery (SSRF) and leak the authenticated user's credentials to an unauthorized server.
 **Learning:** External API responses, even from trusted APIs, should not be blindly trusted for generating subsequent URLs, as API compromises or unexpected behavior can result in unexpected responses that trigger vulnerabilities like SSRF.
 **Prevention:** Use `new URL(path, baseUrl)` to construct dynamically generated URLs, and explicitly validate that the resulting URL `.hostname` matches the expected host (e.g. `api.smugmug.com`) before making the request.
+
+## 2026-05-28 - [Insecure RNG for UUID Generation]
+**Vulnerability:** The application was using `Math.random()` to generate unique identifiers for Toasts in `src/renderer/components/Toast.tsx`. `Math.random()` is not a cryptographically secure pseudo-random number generator (CSPRNG) and is predictable.
+**Learning:** Avoid using `Math.random()` for generating UUIDs, tokens, or security-sensitive values. The Web Crypto API provides robust alternatives.
+**Prevention:** Use `window.crypto.randomUUID()` in browser/renderer environments to securely generate UUIDs.
