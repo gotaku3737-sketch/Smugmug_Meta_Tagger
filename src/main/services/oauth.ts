@@ -257,7 +257,7 @@ export class OAuthService {
             }
           }
 
-          const fileStream = fs.createWriteStream(destPath);
+          const fileStream = fs.createWriteStream(destPath, { mode: 0o600 });
           res.pipe(fileStream);
           fileStream.on('finish', () => {
             fileStream.close();
