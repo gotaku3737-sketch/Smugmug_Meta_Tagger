@@ -83,3 +83,7 @@
 **Vulnerability:** The application was using `Math.random()` to generate unique identifiers for Toasts in `src/renderer/components/Toast.tsx`. `Math.random()` is not a cryptographically secure pseudo-random number generator (CSPRNG) and is predictable.
 **Learning:** Avoid using `Math.random()` for generating UUIDs, tokens, or security-sensitive values. The Web Crypto API provides robust alternatives.
 **Prevention:** Use `window.crypto.randomUUID()` in browser/renderer environments to securely generate UUIDs.
+## 2024-10-21 - Insecure file permissions for downloaded images
+**Vulnerability:** Downloaded files (like SmugMug images) were being written with default permissions via `fs.createWriteStream`, potentially allowing unauthorized users on the same machine to read sensitive media.
+**Learning:** In Node.js, `fs.createWriteStream` defaults to `0o666` (readable and writable by everyone, subject to umask). This violates the principle of least privilege, especially when dealing with personal photos.
+**Prevention:** Always explicitly set file permissions to `0o600` (owner read/write only) when using `fs.createWriteStream` or `fs.writeFile` to download or create files containing sensitive user data.
