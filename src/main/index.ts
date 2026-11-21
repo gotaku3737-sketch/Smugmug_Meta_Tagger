@@ -189,6 +189,12 @@ app.on('ready', () => {
     callback(false);
   });
 
+  // Security: Deny all web permission checks to align with request handler and prevent bypasses
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
+    console.warn(`[Security] Blocked permission check for: ${permission}`);
+    return false;
+  });
+
   // Security: Add strict Content-Security-Policy and other security headers to all responses
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({

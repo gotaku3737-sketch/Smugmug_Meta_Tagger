@@ -87,3 +87,8 @@
 **Vulnerability:** Downloaded files (like SmugMug images) were being written with default permissions via `fs.createWriteStream`, potentially allowing unauthorized users on the same machine to read sensitive media.
 **Learning:** In Node.js, `fs.createWriteStream` defaults to `0o666` (readable and writable by everyone, subject to umask). This violates the principle of least privilege, especially when dealing with personal photos.
 **Prevention:** Always explicitly set file permissions to `0o600` (owner read/write only) when using `fs.createWriteStream` or `fs.writeFile` to download or create files containing sensitive user data.
+
+## 2026-05-29 - [Missing Permission Check Handler]
+**Vulnerability:** The application was missing `setPermissionCheckHandler`, which means web content could potentially query permission statuses (e.g., via `navigator.permissions.query`) and receive `granted` depending on OS defaults, despite `setPermissionRequestHandler` blocking actual requests.
+**Learning:** To fully restrict permissions and adhere to the principle of least privilege in Electron, both permission requests AND permission checks must be blocked.
+**Prevention:** Always implement `session.defaultSession.setPermissionCheckHandler` alongside `setPermissionRequestHandler` to fully deny unexpected permissions.
