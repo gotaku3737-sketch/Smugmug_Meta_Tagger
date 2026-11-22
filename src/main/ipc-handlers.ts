@@ -8,6 +8,7 @@ import type { SmugMugAPI } from './services/smugmug-api';
 import type { DatabaseService } from './services/database';
 import type { DownloaderService } from './services/downloader';
 import type { FaceEngine } from './services/face-engine';
+import { mergeKeywords } from '../shared/types';
 import type { BoundingBox, AppSettings } from '../shared/types';
 import { sleep } from '../shared/utils';
 
@@ -17,12 +18,12 @@ interface Services {
   db: DatabaseService;
   downloader: DownloaderService;
   faceEngine: FaceEngine;
-  settings: AppSettings;
+  getSettings: () => AppSettings;
   onSettingsUpdate: (settings: Partial<AppSettings>) => void;
 }
 
 export function registerIpcHandlers(services: Services): void {
-  const { oauth, api, db, downloader, faceEngine, settings, onSettingsUpdate } = services;
+  const { oauth, api, db, downloader, faceEngine, getSettings, onSettingsUpdate } = services;
 
 
 
@@ -217,6 +218,9 @@ export function registerIpcHandlers(services: Services): void {
 
   safeHandle('tags:uploadTags', async (event, imageKeys: string[]) => {
     const win = BrowserWindow.fromWebContents(event.sender);
+    const currentSettings = getSettings();
+    const knownPeopleNames =
+      currentSettings.keywordFormat === 'plain' ? db.getAllPeople().map((p) => p.name) : [];
     let completed = 0;
 
     for (const imageKey of imageKeys) {
@@ -224,11 +228,20 @@ export function registerIpcHandlers(services: Services): void {
       if (!image || !image.detectedPeople) continue;
 
       const personNames = image.detectedPeople.map((p) => p.personName);
-      const { mergeKeywords } = await import('../shared/types');
-      const newKeywords = mergeKeywords(image.existingKeywords || '', personNames);
+      const previousPersonNames =
+        currentSettings.keywordFormat === 'plain'
+          ? [...knownPeopleNames, ...db.getTagSummary(imageKey).map((t) => t.personName)]
+          : undefined;
+
+      const newKeywords = mergeKeywords(image.existingKeywords || '', personNames, {
+        mode: currentSettings.keywordFormat,
+        prefix: currentSettings.keywordPrefix,
+        previousPersonNames,
+      });
 
       try {
         await api.updateImageKeywords(imageKey, newKeywords);
+        db.updateImageKeywords(imageKey, newKeywords);
         db.markTagsUploaded(imageKey);
       } catch (err) {
         console.error(`[IPC] Failed to upload tags for ${imageKey}:`, err);
@@ -251,7 +264,7 @@ export function registerIpcHandlers(services: Services): void {
   // -----------------------------------------------------------
 
   safeHandle('settings:get', async () => {
-    return settings;
+    return getSettings();
   });
 
   safeHandle('settings:update', async (_event, partial: Partial<AppSettings>) => {

@@ -190,10 +190,21 @@ export interface DatabaseStats {
 // Settings
 // -----------------------------------------------------------
 
+export type KeywordFormatMode = 'prefixed' | 'plain';
+
+export interface KeywordFormatOptions {
+  mode?: KeywordFormatMode;       // default 'prefixed'
+  prefix?: string;                // default PERSON_PREFIX ('Person:')
+  previousPersonNames?: string[]; // optional known names to replace in 'plain' mode
+}
+
 export interface AppSettings {
-  recognitionThreshold: number; // 0.4 - 0.8, default 0.6
-  concurrentDownloads: number;  // default 5
+  recognitionThreshold: number;     // 0.4 - 0.8, default 0.6
+  concurrentDownloads: number;      // default 5
   dataDirectory: string;
+  keywordFormat: KeywordFormatMode; // default 'prefixed'
+  keywordPrefix: string;            // default 'Person:'
+  autoSaveTagManifest: boolean;     // default true
 }
 
 // -----------------------------------------------------------
@@ -263,27 +274,91 @@ export interface ElectronAPI {
 
 export const PERSON_PREFIX = 'Person:';
 
-export function formatPersonKeyword(name: string): string {
-  return `${PERSON_PREFIX}${name}`;
+/** Strip semicolons (SmugMug keyword delimiter) and whitespace, falling back to PERSON_PREFIX if empty. */
+export function sanitizeKeywordPrefix(prefix?: string): string {
+  if (prefix === undefined) return PERSON_PREFIX;
+  const cleaned = prefix.replace(/;/g, '').trim();
+  return cleaned || PERSON_PREFIX;
 }
 
-export function parsePersonKeywords(keywords: string): string[] {
+function resolvePrefix(options?: KeywordFormatOptions): string {
+  if (options?.mode === 'plain') return '';
+  return sanitizeKeywordPrefix(options?.prefix);
+}
+
+export function formatPersonKeyword(name: string, options?: KeywordFormatOptions): string {
+  const trimmed = name.trim();
+  const prefix = resolvePrefix(options);
+  return prefix ? `${prefix}${trimmed}` : trimmed;
+}
+
+export function parsePersonKeywords(keywords: string, options?: KeywordFormatOptions): string[] {
   if (!keywords) return [];
-  return keywords
+  const tokens = keywords
     .split(';')
     .map(k => k.trim())
-    .filter(k => k.startsWith(PERSON_PREFIX))
-    .map(k => k.slice(PERSON_PREFIX.length));
+    .filter(Boolean);
+
+  if (options?.mode === 'plain') {
+    const known = options.previousPersonNames
+      ?.map(n => n.trim().toLowerCase())
+      .filter(Boolean);
+    if (known && known.length > 0) {
+      const knownSet = new Set(known);
+      return tokens.filter(k => knownSet.has(k.toLowerCase()));
+    }
+    return tokens;
+  }
+
+  const prefix = resolvePrefix(options);
+  return tokens
+    .filter(k => k.startsWith(prefix))
+    .map(k => k.slice(prefix.length).trim())
+    .filter(Boolean);
 }
 
-export function mergeKeywords(existingKeywords: string, personNames: string[]): string {
+export function mergeKeywords(
+  existingKeywords: string,
+  personNames: string[],
+  options?: KeywordFormatOptions
+): string {
   const existing = existingKeywords
     ? existingKeywords.split(';').map(k => k.trim()).filter(Boolean)
     : [];
 
-  // Remove any old Person: tags that are being replaced
-  const nonPersonTags = existing.filter(k => !k.startsWith(PERSON_PREFIX));
-  const newPersonTags = personNames.map(formatPersonKeyword);
+  // Deduplicate incoming person names case-insensitively while preserving first occurrence
+  const seenNames = new Set<string>();
+  const uniqueNames: string[] = [];
+  for (const rawName of personNames) {
+    const trimmed = rawName.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (!seenNames.has(key)) {
+      seenNames.add(key);
+      uniqueNames.push(trimmed);
+    }
+  }
+
+  if (options?.mode === 'plain') {
+    const replaceSet = new Set<string>();
+    for (const name of uniqueNames) {
+      replaceSet.add(name.toLowerCase());
+    }
+    for (const prev of options.previousPersonNames ?? []) {
+      const trimmedPrev = prev.trim();
+      if (trimmedPrev) {
+        replaceSet.add(trimmedPrev.toLowerCase());
+      }
+    }
+
+    const nonPersonTags = existing.filter(k => !replaceSet.has(k.toLowerCase()));
+    return [...nonPersonTags, ...uniqueNames].join('; ');
+  }
+
+  const prefix = resolvePrefix(options);
+  // Remove any old person tags matching the active prefix
+  const nonPersonTags = existing.filter(k => !k.startsWith(prefix));
+  const newPersonTags = uniqueNames.map(name => `${prefix}${name}`);
 
   return [...nonPersonTags, ...newPersonTags].join('; ');
 }

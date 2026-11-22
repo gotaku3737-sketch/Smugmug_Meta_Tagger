@@ -12,6 +12,7 @@ import { DatabaseService } from './services/database';
 import { DownloaderService } from './services/downloader';
 import { FaceEngine } from './services/face-engine';
 import { registerIpcHandlers } from './ipc-handlers';
+import { PERSON_PREFIX, sanitizeKeywordPrefix } from '../shared/types';
 import type { AppSettings } from '../shared/types';
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
@@ -35,13 +36,52 @@ const DEFAULT_SETTINGS: AppSettings = {
   recognitionThreshold: 0.6,
   concurrentDownloads: 5,
   dataDirectory: dataDir,
+  keywordFormat: 'prefixed',
+  keywordPrefix: PERSON_PREFIX,
+  autoSaveTagManifest: true,
 };
+
+function normalizeSettings(raw: Partial<AppSettings>, base: AppSettings): AppSettings {
+  const recognitionThreshold =
+    typeof raw.recognitionThreshold === 'number' && Number.isFinite(raw.recognitionThreshold)
+      ? Math.min(0.8, Math.max(0.4, raw.recognitionThreshold))
+      : base.recognitionThreshold;
+
+  const concurrentDownloads =
+    typeof raw.concurrentDownloads === 'number' && Number.isFinite(raw.concurrentDownloads)
+      ? Math.min(20, Math.max(1, Math.round(raw.concurrentDownloads)))
+      : base.concurrentDownloads;
+
+  const keywordFormat =
+    raw.keywordFormat === 'plain' || raw.keywordFormat === 'prefixed'
+      ? raw.keywordFormat
+      : base.keywordFormat;
+
+  const keywordPrefix =
+    typeof raw.keywordPrefix === 'string'
+      ? sanitizeKeywordPrefix(raw.keywordPrefix)
+      : base.keywordPrefix;
+
+  const autoSaveTagManifest =
+    typeof raw.autoSaveTagManifest === 'boolean'
+      ? raw.autoSaveTagManifest
+      : base.autoSaveTagManifest;
+
+  return {
+    recognitionThreshold,
+    concurrentDownloads,
+    dataDirectory: base.dataDirectory,
+    keywordFormat,
+    keywordPrefix,
+    autoSaveTagManifest,
+  };
+}
 
 function loadSettings(): AppSettings {
   try {
     if (fs.existsSync(settingsPath)) {
       const raw = fs.readFileSync(settingsPath, 'utf-8');
-      return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+      return normalizeSettings(JSON.parse(raw) as Partial<AppSettings>, DEFAULT_SETTINGS);
     }
   } catch {
     // ignore corrupt settings — start fresh
@@ -97,9 +137,9 @@ function initializeServices(): void {
     db,
     downloader,
     faceEngine,
-    settings: currentSettings,
+    getSettings: () => currentSettings,
     onSettingsUpdate: (partial) => {
-      currentSettings = { ...currentSettings, ...partial };
+      currentSettings = normalizeSettings(partial, currentSettings);
       saveSettings(currentSettings);
     },
   });

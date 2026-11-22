@@ -264,6 +264,12 @@ export class DatabaseService {
     `).run(imageKey);
   }
 
+  updateImageKeywords(imageKey: string, keywords: string): void {
+    this.db.prepare(`
+      UPDATE images SET existing_keywords = ? WHERE image_key = ?
+    `).run(keywords, imageKey);
+  }
+
   getUntaggedImagesWithFaces(): ImageRecord[] {
     const rows = this.db.prepare(`
       SELECT id, image_key as imageKey, album_key as albumKey, filename,

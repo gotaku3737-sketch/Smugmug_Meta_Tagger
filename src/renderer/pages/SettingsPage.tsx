@@ -3,18 +3,68 @@
 // ============================================================
 
 import React, { useState, useEffect } from 'react';
-import type { DatabaseStats } from '../../shared/types';
+import {
+  mergeKeywords,
+  PERSON_PREFIX,
+  sanitizeKeywordPrefix,
+  type DatabaseStats,
+  type KeywordFormatMode,
+} from '../../shared/types';
+import { useToast } from '../components/Toast';
 
 export function SettingsPage() {
   const [stats, setStats] = useState<DatabaseStats | null>(null);
   const [threshold, setThreshold] = useState(0.6);
+  const [keywordFormat, setKeywordFormat] = useState<KeywordFormatMode>('prefixed');
+  const [keywordPrefix, setKeywordPrefix] = useState(PERSON_PREFIX);
+  const [savingKeywords, setSavingKeywords] = useState(false);
   const [loading, setLoading] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
+  const { showToast } = useToast();
 
   useEffect(() => {
     loadStats();
+    loadSettings();
   }, []);
+
+  async function loadSettings() {
+    try {
+      const current = await window.electronAPI.settings.get();
+      setThreshold(current.recognitionThreshold);
+      setKeywordFormat(current.keywordFormat);
+      setKeywordPrefix(current.keywordPrefix);
+    } catch (err) {
+      console.error('Failed to load settings:', err);
+    }
+  }
+
+  async function handleThresholdChange(nextThreshold: number) {
+    setThreshold(nextThreshold);
+    try {
+      await window.electronAPI.settings.update({ recognitionThreshold: nextThreshold });
+    } catch (err) {
+      console.error('Failed to update threshold:', err);
+    }
+  }
+
+  async function handleSaveKeywordSettings() {
+    setSavingKeywords(true);
+    const sanitizedPrefix = sanitizeKeywordPrefix(keywordPrefix);
+    try {
+      await window.electronAPI.settings.update({
+        keywordFormat,
+        keywordPrefix: sanitizedPrefix,
+      });
+      setKeywordPrefix(sanitizedPrefix);
+      showToast('Keyword format settings saved', 'success');
+    } catch (err) {
+      console.error('Failed to save keyword settings:', err);
+      showToast('Failed to save keyword format settings', 'error');
+    } finally {
+      setSavingKeywords(false);
+    }
+  }
 
   async function loadStats() {
     try {
@@ -51,6 +101,14 @@ export function SettingsPage() {
     }
   }
 
+  const previewKeywords = mergeKeywords('vacation; hawaii', ['Jane Smith', 'John Doe'], {
+    mode: keywordFormat,
+    prefix: keywordPrefix,
+  });
+
+  const activeFormatExample =
+    keywordFormat === 'plain' ? 'Name' : `${sanitizeKeywordPrefix(keywordPrefix)}Name`;
+
   return (
     <div className="page" id="page-settings">
       <div className="page-header">
@@ -78,7 +136,7 @@ export function SettingsPage() {
                 max="0.8"
                 step="0.05"
                 value={threshold}
-                onChange={e => setThreshold(parseFloat(e.target.value))}
+                onChange={e => handleThresholdChange(parseFloat(e.target.value))}
                 style={{
                   flex: 1,
                   height: 4,
@@ -91,6 +149,85 @@ export function SettingsPage() {
               Lower values require closer matches (more precise, fewer false positives).
               Higher values are more lenient (more matches, but may misidentify).
             </p>
+          </div>
+        </div>
+
+        {/* SmugMug Keyword Format */}
+        <div className="card">
+          <div className="card-header">
+            <h3 className="card-title">SmugMug Keyword Format</h3>
+          </div>
+
+          <div className="flex flex-col gap-4">
+            <div className="input-group">
+              <span className="input-label">Keyword Style</span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  id="btn-format-prefixed"
+                  className={`btn btn-sm ${keywordFormat === 'prefixed' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setKeywordFormat('prefixed')}
+                >
+                  Prefixed ({PERSON_PREFIX}Name)
+                </button>
+                <button
+                  type="button"
+                  id="btn-format-plain"
+                  className={`btn btn-sm ${keywordFormat === 'plain' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setKeywordFormat('plain')}
+                >
+                  Plain Name (Name)
+                </button>
+              </div>
+            </div>
+
+            {keywordFormat === 'prefixed' && (
+              <div className="input-group">
+                <label className="input-label" htmlFor="input-keyword-prefix">
+                  Keyword Prefix
+                </label>
+                <input
+                  id="input-keyword-prefix"
+                  type="text"
+                  className="input"
+                  value={keywordPrefix}
+                  placeholder={PERSON_PREFIX}
+                  onChange={e => setKeywordPrefix(e.target.value)}
+                />
+                <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-tertiary)' }}>
+                  Semicolons are removed automatically; leaving this blank resets to{' '}
+                  <code>{PERSON_PREFIX}</code>.
+                </p>
+              </div>
+            )}
+
+            <div className="input-group">
+              <span className="input-label">Live Preview</span>
+              <div
+                style={{
+                  padding: 'var(--space-3) var(--space-4)',
+                  background: 'var(--color-bg-tertiary)',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--color-border)',
+                }}
+              >
+                <code style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-accent-primary)' }}>
+                  {previewKeywords}
+                </code>
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                type="button"
+                id="btn-save-keyword-settings"
+                className="btn btn-primary btn-sm"
+                onClick={handleSaveKeywordSettings}
+                disabled={savingKeywords}
+              >
+                {savingKeywords ? 'Saving...' : 'Save Keyword Format'}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -195,7 +332,7 @@ export function SettingsPage() {
           </p>
           <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-tertiary)', marginTop: 'var(--space-2)' }}>
             Automatically tag people in your SmugMug photos using face recognition.
-            Keywords are stored as <code style={{ color: 'var(--color-accent-primary)' }}>Person:Name</code> on SmugMug.
+            Keywords are stored as <code style={{ color: 'var(--color-accent-primary)' }}>{activeFormatExample}</code> on SmugMug.
           </p>
         </div>
       </div>
