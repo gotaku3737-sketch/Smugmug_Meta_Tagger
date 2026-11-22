@@ -1,4 +1,17 @@
-import { Given, When, Then } from '@cucumber/cucumber';
+import { Given, When, Then, Before } from '@cucumber/cucumber';
+import assert from 'node:assert/strict';
+
+let keywordFormatMode: 'prefixed' | 'plain' = 'prefixed';
+let keywordPrefix = 'Person:';
+let existingKeywordsInput = '';
+let formattedKeywordsResult = '';
+
+Before({ tags: '@keyword-format' }, function () {
+  keywordFormatMode = 'prefixed';
+  keywordPrefix = 'Person:';
+  existingKeywordsInput = '';
+  formattedKeywordsResult = '';
+});
 
 Given('the database contains trained face embeddings for multiple people', function () {
   return 'pending';
@@ -82,4 +95,43 @@ Then('a {int}ms delay should be applied between requests to respect rate limits'
 
 Then('the local database should mark these photos as successfully tagged', function () {
   return 'pending';
+});
+
+// -----------------------------------------------------------
+// Configurable Keyword Format Scenarios
+// -----------------------------------------------------------
+
+Given('the keyword format setting is {string}', function (mode: string) {
+  keywordFormatMode = mode === 'plain' ? 'plain' : 'prefixed';
+  keywordPrefix = keywordFormatMode === 'plain' ? '' : 'Person:';
+});
+
+Given('the keyword format setting is {string} with prefix {string}', function (mode: string, prefix: string) {
+  keywordFormatMode = mode === 'plain' ? 'plain' : 'prefixed';
+  keywordPrefix = prefix;
+});
+
+Given('a photo has existing keywords {string}', function (keywords: string) {
+  existingKeywordsInput = keywords;
+});
+
+When('person tags {string} and {string} are formatted for upload', function (person1: string, person2: string) {
+  const existing = existingKeywordsInput
+    ? existingKeywordsInput.split(';').map(k => k.trim()).filter(Boolean)
+    : [];
+
+  const personNames = [person1, person2];
+  const nonPersonTags = keywordFormatMode === 'prefixed' && keywordPrefix
+    ? existing.filter(k => !k.startsWith(keywordPrefix))
+    : existing.filter(k => !personNames.includes(k));
+
+  const newPersonTags = keywordFormatMode === 'prefixed' && keywordPrefix
+    ? personNames.map(name => `${keywordPrefix}${name}`)
+    : personNames;
+
+  formattedKeywordsResult = [...nonPersonTags, ...newPersonTags].join('; ');
+});
+
+Then('the resulting SmugMug keywords string should be {string}', function (expected: string) {
+  assert.equal(formattedKeywordsResult, expected);
 });

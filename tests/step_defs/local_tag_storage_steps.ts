@@ -12,7 +12,7 @@ let lastQueryResult: unknown[];
 let stagedMatches: FaceMatch[] = [];
 let lastImageKey: string;
 
-Before(function () {
+Before({ tags: '@sqlite' }, function () {
   db = new Database(':memory:');
   db.pragma('foreign_keys = ON');
   db.exec(`
@@ -54,7 +54,7 @@ Before(function () {
   lastImageKey = '';
 });
 
-After(function () {
+After({ tags: '@sqlite' }, function () {
   if (db?.open) db.close();
 });
 

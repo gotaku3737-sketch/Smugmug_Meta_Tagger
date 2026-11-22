@@ -1,3 +1,4 @@
+@sqlite
 Feature: Local Image Tag Storage
   As a user
   I want tag information for each photo stored locally in a normalized table

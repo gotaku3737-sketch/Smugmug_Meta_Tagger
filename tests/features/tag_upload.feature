@@ -1,7 +1,7 @@
 Feature: Tag Upload
   As a user
-  I want to upload my face tags to SmugMug
-  So that my photos are searchable by face on the SmugMug platform
+  I want to upload my face tags to SmugMug using my preferred keyword format
+  So that my photos are searchable by face and compatible with SmugMug Smart Galleries
 
   Scenario: Uploading tags to SmugMug
     Given the user has selected auto-tagged photos
@@ -11,3 +11,17 @@ Feature: Tag Upload
     And existing non-person keywords on the photo should be preserved
     And a 200ms delay should be applied between requests to respect rate limits
     And the local database should mark these photos as successfully tagged
+
+  @keyword-format
+  Scenario: Uploading tags using plain name keyword format
+    Given the keyword format setting is "plain"
+    And a photo has existing keywords "vacation; hawaii"
+    When person tags "Jane Smith" and "John Doe" are formatted for upload
+    Then the resulting SmugMug keywords string should be "vacation; hawaii; Jane Smith; John Doe"
+
+  @keyword-format
+  Scenario: Uploading tags using a custom keyword prefix
+    Given the keyword format setting is "prefixed" with prefix "Family:"
+    And a photo has existing keywords "Family:Old Name; vacation; hawaii"
+    When person tags "Jane Smith" and "John Doe" are formatted for upload
+    Then the resulting SmugMug keywords string should be "vacation; hawaii; Family:Jane Smith; Family:John Doe"

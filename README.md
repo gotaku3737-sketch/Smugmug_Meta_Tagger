@@ -20,8 +20,8 @@ SmugMug Meta Tagger connects to your SmugMug account, downloads photos at a mana
 - 🔍 **Face detection** powered by `face-api.js` (SSD MobileNet v1 + 68-point landmarks + 128-dim embeddings)
 - 🎓 **Interactive face trainer** — click on detected faces and assign a name; 3+ samples per person recommended
 - 🤖 **Auto-tagger** — runs recognition across all scanned photos, shows confidence scores, lets you approve before uploading
-- 🏷️ **Keyword upload** — writes `Person:Name` tags to SmugMug, preserving all existing non-person keywords
-- 💾 **Local SQLite database** tracking albums, images, face descriptors, and tag upload status
+- 🏷️ **Configurable SmugMug keyword upload** — writes `Person:Name` (default), plain `Name`, or a custom prefix to SmugMug `Keywords`, preserving all existing non-person keywords and working natively with SmugMug search and Smart Galleries
+- 💾 **Local SQLite database + portable file exports** — tracks albums, images, face descriptors, and tag upload status in SQLite, auto-saves a portable `tags.json` manifest (with backup/re-import), and supports CSV and XMP sidecar (with MWG face regions) exports
 - ⚡ **Performance** — virtualised result lists, parallel downloads (5 concurrent), batch face processing with event-loop yields
 
 ---
@@ -154,8 +154,8 @@ Go to the **Auto-Tagger** page and click **Run Auto-Tagger**. The engine:
 
 Review the matches, use **✓ High Confidence** to auto-select reliable results, then click **Upload Tags**.
 
-#### 6. Upload Tags to SmugMug
-The app sends a `PATCH` request for each selected photo, adding `Person:Name` keywords while preserving all existing tags. A 200ms delay is applied between requests to respect SmugMug's rate limits.
+#### 6. Upload Tags to SmugMug (and Save Locally)
+The app sends a `PATCH` request for each selected photo, writing formatted person keywords (`Person:Name` by default, or plain `Name` / custom prefix per Settings) while preserving all existing non-person tags. A 200ms delay is applied between requests to respect SmugMug's rate limits. Tag changes are also synced to a local portable `tags.json` manifest and can be exported to CSV or XMP sidecar files at any time.
 
 ---
 
@@ -170,9 +170,14 @@ All local data is stored in Electron's `userData` directory:
 
 ```
 smugmug-data/
-├── smugmug_tagger.db     # SQLite database (albums, images, face data)
+├── smugmug_tagger.db     # SQLite database (albums, images, face data, image_tags)
+├── tags.json             # Auto-saved portable tag manifest (backup & re-import)
 ├── credentials.json      # Encrypted OAuth tokens
-├── settings.json         # App preferences (threshold, concurrency, etc.)
+├── settings.json         # App preferences (threshold, keyword format, concurrency, etc.)
+├── exports/              # On-demand tag exports
+│   ├── smugmug_tags.csv  # Flat CSV export for spreadsheet auditing
+│   └── xmp/              # XMP sidecars with dc:subject + MWG face regions
+│       └── {albumKey}/
 ├── thumbnails/           # ~150px thumbnails, organised by albumKey
 │   └── {albumKey}/
 └── medium/               # ~800px images for face detection
@@ -191,7 +196,10 @@ Open the **Settings** page to adjust:
 |---------|---------|-------------|
 | Recognition Threshold | `0.6` | Face match distance threshold (lower = stricter, range 0.4–0.8) |
 | Concurrent Downloads | `5` | Parallel download connections |
-| Data Directory | (userData) | Where photos and the database are stored |
+| Keyword Format | `prefixed` | SmugMug keyword style: `prefixed` (`Person:Name`) or `plain` (`Name`) |
+| Keyword Prefix | `Person:` | Prefix used when Keyword Format is `prefixed` (customizable, e.g. `Family:`) |
+| Auto-save Tag Manifest | `true` | Automatically sync local `tags.json` when tags are saved, approved, or uploaded |
+| Data Directory | (userData) | Where photos, the database, and local tag exports are stored |
 
 ### Danger Zone
 
@@ -248,17 +256,29 @@ Smugmug_Meta_Tagger/
 
 ---
 
-## Keyword Format
+## Keyword Format & Local Tag Exports
 
-Person tags written to SmugMug use the prefix `Person:`:
+### SmugMug Keywords
+Person tags written to SmugMug's `Keywords` field default to the `Person:` prefix, and can be configured in **Settings** to use plain names or a custom prefix:
 
 ```
+# Prefixed (default)
 Person:Jane Smith; Person:John Doe; vacation; hawaii
+
+# Plain name
+Jane Smith; John Doe; vacation; hawaii
 ```
 
 - Existing non-person keywords are **always preserved**
-- Old `Person:` tags for the same image are replaced (not duplicated)
-- Tags are semicolon-delimited, matching SmugMug's format
+- Old person tags for the same image are replaced (not duplicated)
+- Tags are semicolon-delimited, matching SmugMug's format and working natively with SmugMug search and **Smart Galleries**
+
+### Local Saved Files
+Alongside `smugmug_tagger.db`, the app supports portable local tag files (see [plan.md](plan.md) for schemas and phased rollout):
+
+- **`tags.json` (Auto-saved JSON Manifest)** — Human-readable backup of all tagged images, people, confidence scores, face bounding boxes, and approval/upload status. Can be re-imported after a database reset or machine migration.
+- **`smugmug_tags.csv` (CSV Export)** — Flat spreadsheet export for bulk auditing and review in Excel or Google Sheets.
+- **`.xmp` Sidecar Files (XMP Export)** — Industry-standard sidecars containing `dc:subject` keywords and **MWG Face Regions** (`mwg-rs:Regions`) preserving exact face bounding boxes for Lightroom, DigiKam, and Darktable.
 
 ---
 
