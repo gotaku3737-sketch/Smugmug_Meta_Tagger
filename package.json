@@ -11,7 +11,7 @@
     "make": "electron-forge make",
     "publish": "electron-forge publish",
     "lint": "eslint --ext .ts,.tsx .",
-    "test": "tsx --test src/shared/types.test.ts",
+    "test": "tsx --test src/shared/types.test.ts src/main/services/tag-exporter.test.ts",
     "test:bdd": "cucumber-js"
   },
   "keywords": [],

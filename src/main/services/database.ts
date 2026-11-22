@@ -13,6 +13,7 @@ import type {
   ImageTagRow,
   DatabaseStats,
   BoundingBox,
+  TagManifestImageEntry,
 } from '../../shared/types';
 
 export class DatabaseService {
@@ -87,6 +88,7 @@ export class DatabaseService {
         thumb_url TEXT,
         medium_url TEXT,
         original_url TEXT,
+        web_uri TEXT,
         thumb_downloaded INTEGER DEFAULT 0,
         medium_downloaded INTEGER DEFAULT 0,
         faces_detected INTEGER DEFAULT 0,
@@ -118,6 +120,11 @@ export class DatabaseService {
       CREATE INDEX IF NOT EXISTS idx_image_tags_person ON image_tags(person_name);
       CREATE INDEX IF NOT EXISTS idx_image_tags_uploaded ON image_tags(uploaded);
     `);
+
+    const imageCols = this.db.prepare('PRAGMA table_info(images)').all() as { name: string }[];
+    if (!imageCols.some(c => c.name === 'web_uri')) {
+      this.db.exec('ALTER TABLE images ADD COLUMN web_uri TEXT');
+    }
   }
 
   // -----------------------------------------------------------
@@ -163,19 +170,30 @@ export class DatabaseService {
     thumbUrl?: string,
     mediumUrl?: string,
     originalUrl?: string,
-    existingKeywords?: string
+    existingKeywords?: string,
+    webUri?: string
   ): void {
     this.db.prepare(`
-      INSERT INTO images (image_key, album_key, filename, thumb_url, medium_url, original_url, existing_keywords)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO images (image_key, album_key, filename, thumb_url, medium_url, original_url, existing_keywords, web_uri)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(image_key) DO UPDATE SET
         album_key = excluded.album_key,
         filename = excluded.filename,
         thumb_url = COALESCE(excluded.thumb_url, images.thumb_url),
         medium_url = COALESCE(excluded.medium_url, images.medium_url),
         original_url = COALESCE(excluded.original_url, images.original_url),
-        existing_keywords = COALESCE(excluded.existing_keywords, images.existing_keywords)
-    `).run(imageKey, albumKey, filename, thumbUrl || null, mediumUrl || null, originalUrl || null, existingKeywords || null);
+        existing_keywords = COALESCE(excluded.existing_keywords, images.existing_keywords),
+        web_uri = COALESCE(excluded.web_uri, images.web_uri)
+    `).run(
+      imageKey,
+      albumKey,
+      filename,
+      thumbUrl || null,
+      mediumUrl || null,
+      originalUrl || null,
+      existingKeywords || null,
+      webUri || null
+    );
   }
 
   getImagesByAlbum(albumKey: string): ImageRecord[] {
@@ -183,6 +201,7 @@ export class DatabaseService {
       SELECT id, image_key as imageKey, album_key as albumKey, filename,
              thumb_path as thumbPath, medium_path as mediumPath,
              thumb_url as thumbUrl, medium_url as mediumUrl, original_url as originalUrl,
+             web_uri as webUri,
              thumb_downloaded as thumbDownloaded, medium_downloaded as mediumDownloaded,
              faces_detected as facesDetected, face_count as faceCount,
              tags_uploaded as tagsUploaded, existing_keywords as existingKeywords,
@@ -211,6 +230,7 @@ export class DatabaseService {
       SELECT id, image_key as imageKey, album_key as albumKey, filename,
              thumb_path as thumbPath, medium_path as mediumPath,
              thumb_url as thumbUrl, medium_url as mediumUrl, original_url as originalUrl,
+             web_uri as webUri,
              thumb_downloaded as thumbDownloaded, medium_downloaded as mediumDownloaded,
              faces_detected as facesDetected, face_count as faceCount,
              tags_uploaded as tagsUploaded, existing_keywords as existingKeywords,
@@ -275,6 +295,7 @@ export class DatabaseService {
       SELECT id, image_key as imageKey, album_key as albumKey, filename,
              thumb_path as thumbPath, medium_path as mediumPath,
              thumb_url as thumbUrl, medium_url as mediumUrl, original_url as originalUrl,
+             web_uri as webUri,
              thumb_downloaded as thumbDownloaded, medium_downloaded as mediumDownloaded,
              faces_detected as facesDetected, face_count as faceCount,
              tags_uploaded as tagsUploaded, existing_keywords as existingKeywords,
@@ -306,6 +327,7 @@ export class DatabaseService {
       SELECT id, image_key as imageKey, album_key as albumKey, filename,
              thumb_path as thumbPath, medium_path as mediumPath,
              thumb_url as thumbUrl, medium_url as mediumUrl, original_url as originalUrl,
+             web_uri as webUri,
              thumb_downloaded as thumbDownloaded, medium_downloaded as mediumDownloaded,
              faces_detected as facesDetected, face_count as faceCount,
              tags_uploaded as tagsUploaded, existing_keywords as existingKeywords,
@@ -431,6 +453,145 @@ export class DatabaseService {
     `).all(imageKey) as ImageTagRow[];
   }
 
+  /** Return all tagged images and their tag metadata formatted for manifest/CSV/XMP export. */
+  getAllExportableImageTags(albumKey?: string): Record<string, TagManifestImageEntry> {
+    const query = `
+      SELECT t.image_key as imageKey,
+             COALESCE(i.album_key, '') as albumKey,
+             COALESCE(a.title, '') as albumTitle,
+             COALESCE(i.filename, t.image_key) as filename,
+             COALESCE(i.web_uri, '') as webUri,
+             t.person_name as personName,
+             COALESCE(t.confidence, 0) as confidence,
+             COALESCE(t.bbox_x, 0) as bboxX,
+             COALESCE(t.bbox_y, 0) as bboxY,
+             COALESCE(t.bbox_w, 0) as bboxW,
+             COALESCE(t.bbox_h, 0) as bboxH,
+             t.approved as approved,
+             t.uploaded as uploaded,
+             COALESCE(t.tagged_at, '') as taggedAt
+      FROM image_tags t
+      JOIN images i ON i.image_key = t.image_key
+      LEFT JOIN albums a ON a.album_key = i.album_key
+      ${albumKey ? 'WHERE i.album_key = ?' : ''}
+      ORDER BY a.title, i.filename, t.confidence DESC
+    `;
+
+    const rows = (
+      albumKey
+        ? this.db.prepare(query).all(albumKey)
+        : this.db.prepare(query).all()
+    ) as Array<{
+      imageKey: string;
+      albumKey: string;
+      albumTitle: string;
+      filename: string;
+      webUri: string;
+      personName: string;
+      confidence: number;
+      bboxX: number;
+      bboxY: number;
+      bboxW: number;
+      bboxH: number;
+      approved: number;
+      uploaded: number;
+      taggedAt: string;
+    }>;
+
+    const grouped: Record<string, TagManifestImageEntry> = {};
+    for (const row of rows) {
+      if (!grouped[row.imageKey]) {
+        grouped[row.imageKey] = {
+          imageKey: row.imageKey,
+          albumKey: row.albumKey,
+          albumTitle: row.albumTitle,
+          filename: row.filename,
+          webUri: row.webUri,
+          tags: [],
+        };
+      }
+      grouped[row.imageKey].tags.push({
+        personName: row.personName,
+        confidence: row.confidence,
+        bbox: {
+          x: row.bboxX,
+          y: row.bboxY,
+          width: row.bboxW,
+          height: row.bboxH,
+        },
+        approved: Boolean(row.approved),
+        uploaded: Boolean(row.uploaded),
+        taggedAt: row.taggedAt,
+      });
+    }
+
+    return grouped;
+  }
+
+  /** Restore image_tags and image recognition metadata from a validated JSON manifest. */
+  restoreImageTagsFromManifest(
+    images: Record<string, TagManifestImageEntry>
+  ): { importedCount: number; skippedCount: number } {
+    const checkImage = this.db.prepare('SELECT image_key, face_count FROM images WHERE image_key = ?');
+    const deleteTags = this.db.prepare('DELETE FROM image_tags WHERE image_key = ?');
+    const insertTag = this.db.prepare(`
+      INSERT INTO image_tags (image_key, person_name, confidence, bbox_x, bbox_y, bbox_w, bbox_h, approved, uploaded, tagged_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const updateImage = this.db.prepare(`
+      UPDATE images
+      SET faces_detected = 1,
+          face_count = ?,
+          detected_people = ?,
+          tags_uploaded = ?
+      WHERE image_key = ?
+    `);
+
+    let importedCount = 0;
+    let skippedCount = 0;
+
+    const transaction = this.db.transaction(() => {
+      for (const [imageKey, entry] of Object.entries(images)) {
+        const existing = checkImage.get(imageKey) as { image_key: string; face_count: number } | undefined;
+        if (!existing) {
+          skippedCount += entry.tags.length;
+          continue;
+        }
+
+        deleteTags.run(imageKey);
+        const matches: FaceMatch[] = [];
+        for (const tag of entry.tags) {
+          insertTag.run(
+            imageKey,
+            tag.personName,
+            tag.confidence,
+            tag.bbox.x,
+            tag.bbox.y,
+            tag.bbox.width,
+            tag.bbox.height,
+            tag.approved ? 1 : 0,
+            tag.uploaded ? 1 : 0,
+            tag.taggedAt || new Date().toISOString()
+          );
+          matches.push({
+            personName: tag.personName,
+            confidence: tag.confidence,
+            distance: Math.max(0, 1 - tag.confidence),
+            bbox: tag.bbox,
+          });
+          importedCount++;
+        }
+
+        const faceCount = Math.max(existing.face_count || 0, entry.tags.length);
+        const allUploaded = entry.tags.length > 0 && entry.tags.every(t => t.uploaded) ? 1 : 0;
+        updateImage.run(faceCount, JSON.stringify(matches), allUploaded, imageKey);
+      }
+    });
+
+    transaction();
+    return { importedCount, skippedCount };
+  }
+
   // -----------------------------------------------------------
   // People & Face Descriptors
   // -----------------------------------------------------------
@@ -546,6 +707,7 @@ export class DatabaseService {
   }
 
   resetDatabase(): void {
+    this.db.exec('DROP TABLE IF EXISTS image_tags');
     this.db.exec('DROP TABLE IF EXISTS face_descriptors');
     this.db.exec('DROP TABLE IF EXISTS people');
     this.db.exec('DROP TABLE IF EXISTS images');

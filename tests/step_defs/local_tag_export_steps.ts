@@ -3,43 +3,28 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-
-interface ExportTagEntry {
-  personName: string;
-  confidence: number;
-  bbox: { x: number; y: number; width: number; height: number };
-  approved: boolean;
-  uploaded: boolean;
-  taggedAt: string;
-}
-
-interface ExportImageEntry {
-  imageKey: string;
-  albumKey: string;
-  albumTitle: string;
-  filename: string;
-  webUri: string;
-  tags: ExportTagEntry[];
-}
-
-interface TagManifest {
-  schemaVersion: number;
-  exportedAt: string;
-  keywordFormat: 'prefixed' | 'plain';
-  keywordPrefix: string;
-  images: Record<string, ExportImageEntry>;
-}
+import type { TagManifestEntry, TagManifestImageEntry } from '../../src/shared/types';
+import {
+  CSV_HEADER,
+  exportTagsToCsv,
+  exportTagsToXmp,
+  readTagManifest,
+  serializeTagManifest,
+  writeTagManifest,
+} from '../../src/main/services/tag-exporter';
 
 let tempDir = '';
 let autoSaveEnabled = true;
-let imagesStore: Record<string, ExportImageEntry> = {};
-let restoredTags: Array<{ imageKey: string; tag: ExportTagEntry }> = [];
+let imagesStore: Record<string, TagManifestImageEntry> = {};
+let restoredTags: Array<{ imageKey: string; tag: TagManifestEntry }> = [];
+let writtenXmpPaths: string[] = [];
 
 Before({ tags: '@local-export' }, function () {
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'smugmug-tag-export-'));
   autoSaveEnabled = true;
   imagesStore = {};
   restoredTags = [];
+  writtenXmpPaths = [];
 });
 
 After({ tags: '@local-export' }, function () {
@@ -47,72 +32,6 @@ After({ tags: '@local-export' }, function () {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
-
-function escapeCsv(value: string): string {
-  if (value.includes(',') || value.includes('"') || value.includes('\n')) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
-  return value;
-}
-
-function escapeXml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
-
-function buildXmpContent(image: ExportImageEntry, prefix: string): string {
-  const subjects = image.tags
-    .map(t => `        <rdf:li>${escapeXml(`${prefix}${t.personName}`)}</rdf:li>`)
-    .join('\n');
-
-  const regions = image.tags
-    .map(t => {
-      const centerX = (t.bbox.x + t.bbox.width / 2).toFixed(4);
-      const centerY = (t.bbox.y + t.bbox.height / 2).toFixed(4);
-      const w = t.bbox.width.toFixed(4);
-      const h = t.bbox.height.toFixed(4);
-      return `          <rdf:li rdf:parseType="Resource">
-            <mwg-rs:Name>${escapeXml(t.personName)}</mwg-rs:Name>
-            <mwg-rs:Type>Face</mwg-rs:Type>
-            <mwg-rs:Area rdf:parseType="Resource">
-              <stArea:x>${centerX}</stArea:x>
-              <stArea:y>${centerY}</stArea:y>
-              <stArea:w>${w}</stArea:w>
-              <stArea:h>${h}</stArea:h>
-              <stArea:unit>normalized</stArea:unit>
-            </mwg-rs:Area>
-          </rdf:li>`;
-    })
-    .join('\n');
-
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<x:xmpmeta xmlns:x="adobe:ns:meta/">
-  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-    <rdf:Description rdf:about=""
-      xmlns:dc="http://purl.org/dc/elements/1.1/"
-      xmlns:mwg-rs="http://www.metadataworkinggroup.com/schemas/regions/"
-      xmlns:stArea="http://ns.adobe.com/xmp/sType/Area#">
-      <dc:subject>
-        <rdf:Bag>
-${subjects}
-        </rdf:Bag>
-      </dc:subject>
-      <mwg-rs:Regions rdf:parseType="Resource">
-        <mwg-rs:RegionList>
-          <rdf:Bag>
-${regions}
-          </rdf:Bag>
-        </mwg-rs:RegionList>
-      </mwg-rs:Regions>
-    </rdf:Description>
-  </rdf:RDF>
-</x:xmpmeta>
-`;
-}
 
 // -----------------------------------------------------------
 // JSON Manifest Auto-Save & Re-Import
@@ -162,20 +81,17 @@ Given(
 
 When('the local tag manifest is synced to {string}', function (filename: string) {
   assert.equal(autoSaveEnabled, true);
-  const manifest: TagManifest = {
-    schemaVersion: 1,
-    exportedAt: new Date().toISOString(),
+  const manifest = serializeTagManifest(imagesStore, {
     keywordFormat: 'prefixed',
     keywordPrefix: 'Person:',
-    images: imagesStore,
-  };
-  fs.writeFileSync(path.join(tempDir, filename), JSON.stringify(manifest, null, 2), 'utf8');
+  });
+  writeTagManifest(path.join(tempDir, filename), manifest);
 });
 
 Then('{string} should exist with schemaVersion {int}', function (filename: string, version: number) {
   const fullPath = path.join(tempDir, filename);
   assert.ok(fs.existsSync(fullPath), `${filename} should exist`);
-  const parsed = JSON.parse(fs.readFileSync(fullPath, 'utf8')) as TagManifest;
+  const parsed = readTagManifest(fullPath);
   assert.equal(parsed.schemaVersion, version);
 });
 
@@ -190,7 +106,7 @@ Then(
     width: number,
     height: number
   ) {
-    const parsed = JSON.parse(fs.readFileSync(path.join(tempDir, filename), 'utf8')) as TagManifest;
+    const parsed = readTagManifest(path.join(tempDir, filename));
     const img = parsed.images[imageKey];
     assert.ok(img, `Image ${imageKey} should be present in manifest`);
     const tag = img.tags.find(t => t.personName === personName);
@@ -202,52 +118,55 @@ Then(
 
 Given('a valid {string} manifest exists with {int} tagged people across {int} images', function (
   filename: string,
-  _tagCount: number,
-  _imageCount: number
+  tagCount: number,
+  imageCount: number
 ) {
-  const manifest: TagManifest = {
-    schemaVersion: 1,
-    exportedAt: '2026-11-22T15:00:00.000Z',
-    keywordFormat: 'prefixed',
-    keywordPrefix: 'Person:',
-    images: {
-      photo_1: {
-        imageKey: 'photo_1',
-        albumKey: 'album_1',
-        albumTitle: 'Trip',
-        filename: 'IMG_0001.JPG',
-        webUri: 'https://example.smugmug.com/album_1/i-photo_1',
-        tags: [
-          {
-            personName: 'Jane Smith',
-            confidence: 0.91,
-            bbox: { x: 0.1, y: 0.2, width: 0.2, height: 0.25 },
-            approved: true,
-            uploaded: true,
-            taggedAt: '2026-11-22T14:00:00.000Z',
-          },
-        ],
-      },
-      photo_2: {
-        imageKey: 'photo_2',
-        albumKey: 'album_1',
-        albumTitle: 'Trip',
-        filename: 'IMG_0002.JPG',
-        webUri: 'https://example.smugmug.com/album_1/i-photo_2',
-        tags: [
-          {
-            personName: 'John Doe',
-            confidence: 0.78,
-            bbox: { x: 0.3, y: 0.15, width: 0.18, height: 0.22 },
-            approved: false,
-            uploaded: false,
-            taggedAt: '2026-11-22T14:05:00.000Z',
-          },
-        ],
-      },
+  const images: Record<string, TagManifestImageEntry> = {
+    photo_1: {
+      imageKey: 'photo_1',
+      albumKey: 'album_1',
+      albumTitle: 'Trip',
+      filename: 'IMG_0001.JPG',
+      webUri: 'https://example.smugmug.com/album_1/i-photo_1',
+      tags: [
+        {
+          personName: 'Jane Smith',
+          confidence: 0.91,
+          bbox: { x: 0.1, y: 0.2, width: 0.2, height: 0.25 },
+          approved: true,
+          uploaded: true,
+          taggedAt: '2026-11-22T14:00:00.000Z',
+        },
+      ],
+    },
+    photo_2: {
+      imageKey: 'photo_2',
+      albumKey: 'album_1',
+      albumTitle: 'Trip',
+      filename: 'IMG_0002.JPG',
+      webUri: 'https://example.smugmug.com/album_1/i-photo_2',
+      tags: [
+        {
+          personName: 'John Doe',
+          confidence: 0.78,
+          bbox: { x: 0.3, y: 0.15, width: 0.18, height: 0.22 },
+          approved: false,
+          uploaded: false,
+          taggedAt: '2026-11-22T14:05:00.000Z',
+        },
+      ],
     },
   };
-  fs.writeFileSync(path.join(tempDir, filename), JSON.stringify(manifest, null, 2), 'utf8');
+  assert.equal(Object.keys(images).length, imageCount);
+  const totalTags = Object.values(images).reduce((sum, img) => sum + img.tags.length, 0);
+  assert.equal(totalTags, tagCount);
+
+  const manifest = serializeTagManifest(images, {
+    keywordFormat: 'prefixed',
+    keywordPrefix: 'Person:',
+    exportedAt: '2026-11-22T15:00:00.000Z',
+  });
+  writeTagManifest(path.join(tempDir, filename), manifest);
 });
 
 Given('the local tag store is empty', function () {
@@ -255,7 +174,7 @@ Given('the local tag store is empty', function () {
 });
 
 When('the user imports {string}', function (filename: string) {
-  const parsed = JSON.parse(fs.readFileSync(path.join(tempDir, filename), 'utf8')) as TagManifest;
+  const parsed = readTagManifest(path.join(tempDir, filename));
   assert.equal(parsed.schemaVersion, 1, 'Manifest schemaVersion must be 1');
   for (const [imageKey, img] of Object.entries(parsed.images)) {
     for (const tag of img.tags) {
@@ -279,32 +198,11 @@ Then('the local tag store should contain all {int} restored tag records with the
 // -----------------------------------------------------------
 
 When('the user exports tags to CSV {string}', function (filename: string) {
-  const header = 'album_title,album_key,filename,image_key,person_name,confidence,approved,uploaded,tagged_at,web_uri';
-  const rows = [header];
-  for (const img of Object.values(imagesStore)) {
-    for (const tag of img.tags) {
-      rows.push(
-        [
-          img.albumTitle,
-          img.albumKey,
-          img.filename,
-          img.imageKey,
-          tag.personName,
-          String(tag.confidence),
-          String(tag.approved),
-          String(tag.uploaded),
-          tag.taggedAt,
-          img.webUri,
-        ]
-          .map(escapeCsv)
-          .join(',')
-      );
-    }
-  }
-  fs.writeFileSync(path.join(tempDir, filename), `${rows.join('\n')}\n`, 'utf8');
+  exportTagsToCsv(path.join(tempDir, filename), imagesStore);
 });
 
 Then('{string} should contain the header {string}', function (filename: string, expectedHeader: string) {
+  assert.equal(expectedHeader, CSV_HEADER);
   const lines = fs.readFileSync(path.join(tempDir, filename), 'utf8').trim().split('\n');
   assert.equal(lines[0], expectedHeader);
 });
@@ -324,28 +222,29 @@ Then('{string} should include a row for {string} and {string}', function (
 // -----------------------------------------------------------
 
 When('the user exports XMP sidecar files with prefix {string}', function (prefix: string) {
-  for (const img of Object.values(imagesStore)) {
-    const xmpPath = path.join(tempDir, `${img.filename}.xmp`);
-    fs.writeFileSync(xmpPath, buildXmpContent(img, prefix), 'utf8');
-  }
+  writtenXmpPaths = exportTagsToXmp(tempDir, imagesStore, {
+    mode: 'prefixed',
+    prefix,
+    organizeByAlbum: true,
+  });
 });
 
 Then('an XMP sidecar file {string} should be created', function (xmpFilename: string) {
-  const fullPath = path.join(tempDir, xmpFilename);
-  assert.ok(fs.existsSync(fullPath), `${xmpFilename} should exist`);
+  const matchedPath = writtenXmpPaths.find(
+    p => path.basename(p) === xmpFilename && fs.existsSync(p)
+  );
+  assert.ok(matchedPath, `${xmpFilename} should be created`);
 });
 
 Then('the XMP sidecar should include dc:subject keyword {string}', function (keyword: string) {
-  const xmpFiles = fs.readdirSync(tempDir).filter(f => f.endsWith('.xmp'));
-  assert.ok(xmpFiles.length > 0, 'Expected at least one .xmp file');
-  const content = fs.readFileSync(path.join(tempDir, xmpFiles[0]), 'utf8');
+  assert.ok(writtenXmpPaths.length > 0, 'Expected at least one .xmp file');
+  const content = fs.readFileSync(writtenXmpPaths[0], 'utf8');
   assert.ok(content.includes(`<rdf:li>${keyword}</rdf:li>`), `Expected dc:subject keyword ${keyword}`);
 });
 
 Then('the XMP sidecar should include an MWG face region for {string}', function (personName: string) {
-  const xmpFiles = fs.readdirSync(tempDir).filter(f => f.endsWith('.xmp'));
-  assert.ok(xmpFiles.length > 0, 'Expected at least one .xmp file');
-  const content = fs.readFileSync(path.join(tempDir, xmpFiles[0]), 'utf8');
+  assert.ok(writtenXmpPaths.length > 0, 'Expected at least one .xmp file');
+  const content = fs.readFileSync(writtenXmpPaths[0], 'utf8');
   assert.ok(content.includes(`<mwg-rs:Name>${personName}</mwg-rs:Name>`));
   assert.ok(content.includes('<mwg-rs:Type>Face</mwg-rs:Type>'));
   assert.ok(content.includes('<stArea:x>'));

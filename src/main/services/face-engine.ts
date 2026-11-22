@@ -274,6 +274,9 @@ export class FaceEngine {
     // Filter detected people to only approved names
     const approved = image.detectedPeople.filter(p => approvedNames.includes(p.personName));
     this.db.updateDetectedPeople(imageKey, approved);
+    for (const match of approved) {
+      this.db.approveImageTag(imageKey, match.personName);
+    }
   }
 
   // -----------------------------------------------------------

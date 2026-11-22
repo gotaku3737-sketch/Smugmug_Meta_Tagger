@@ -16,6 +16,7 @@ export function AutoTagger() {
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<TagUploadProgress | null>(null);
   const { showToast } = useToast();
 
@@ -114,6 +115,27 @@ export function AutoTagger() {
       const msg = err instanceof Error ? err.message : String(err);
       showToast(`Upload failed: ${msg}`, 'error');
       setUploading(false);
+    }
+  }
+
+  async function handleExport(kind: 'json' | 'csv' | 'xmp') {
+    setExporting(true);
+    try {
+      if (kind === 'json') {
+        const res = await window.electronAPI.tags.exportManifest();
+        if (!res.canceled) showToast(`Exported ${res.count} tags to JSON`, 'success');
+      } else if (kind === 'csv') {
+        const res = await window.electronAPI.tags.exportCsv();
+        if (!res.canceled) showToast(`Exported ${res.count} tag rows to CSV`, 'success');
+      } else {
+        const res = await window.electronAPI.tags.exportXmp();
+        if (!res.canceled) showToast(`Exported ${res.count} XMP sidecars`, 'success');
+      }
+    } catch (err) {
+      console.error(`Failed to export ${kind}:`, err);
+      showToast(`Failed to export ${kind.toUpperCase()}`, 'error');
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -225,17 +247,49 @@ export function AutoTagger() {
         </div>
       ) : (
         <>
-          {/* Stats row */}
-          <div className="flex gap-4 mb-4" style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-secondary)' }}>
-            <span>
-              🟢 High confidence: {results.filter(r => r.detectedPeople?.every(p => p.confidence >= 0.7)).length}
-            </span>
-            <span>
-              🟡 Medium: {results.filter(r => r.detectedPeople?.some(p => p.confidence >= 0.5 && p.confidence < 0.7)).length}
-            </span>
-            <span>
-              🔴 Low: {results.filter(r => r.detectedPeople?.some(p => p.confidence < 0.5)).length}
-            </span>
+          {/* Stats & local export bar */}
+          <div className="flex justify-between items-center mb-4" style={{ flexWrap: 'wrap', gap: 'var(--space-3)' }}>
+            <div className="flex gap-4" style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-secondary)' }}>
+              <span>
+                🟢 High confidence: {results.filter(r => r.detectedPeople?.every(p => p.confidence >= 0.7)).length}
+              </span>
+              <span>
+                🟡 Medium: {results.filter(r => r.detectedPeople?.some(p => p.confidence >= 0.5 && p.confidence < 0.7)).length}
+              </span>
+              <span>
+                🔴 Low: {results.filter(r => r.detectedPeople?.some(p => p.confidence < 0.5)).length}
+              </span>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                id="btn-tagger-export-json"
+                onClick={() => handleExport('json')}
+                disabled={exporting || uploading}
+              >
+                Export JSON
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                id="btn-tagger-export-csv"
+                onClick={() => handleExport('csv')}
+                disabled={exporting || uploading}
+              >
+                Export CSV
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                id="btn-tagger-export-xmp"
+                onClick={() => handleExport('xmp')}
+                disabled={exporting || uploading}
+              >
+                Export XMP
+              </button>
+            </div>
           </div>
 
           {/* Virtualised results list */}

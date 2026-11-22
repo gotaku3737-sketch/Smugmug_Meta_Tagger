@@ -17,7 +17,9 @@ export function SettingsPage() {
   const [threshold, setThreshold] = useState(0.6);
   const [keywordFormat, setKeywordFormat] = useState<KeywordFormatMode>('prefixed');
   const [keywordPrefix, setKeywordPrefix] = useState(PERSON_PREFIX);
+  const [autoSaveTagManifest, setAutoSaveTagManifest] = useState(true);
   const [savingKeywords, setSavingKeywords] = useState(false);
+  const [exportBusy, setExportBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
@@ -34,6 +36,7 @@ export function SettingsPage() {
       setThreshold(current.recognitionThreshold);
       setKeywordFormat(current.keywordFormat);
       setKeywordPrefix(current.keywordPrefix);
+      setAutoSaveTagManifest(current.autoSaveTagManifest);
     } catch (err) {
       console.error('Failed to load settings:', err);
     }
@@ -63,6 +66,84 @@ export function SettingsPage() {
       showToast('Failed to save keyword format settings', 'error');
     } finally {
       setSavingKeywords(false);
+    }
+  }
+
+  async function handleToggleAutoSaveManifest(enabled: boolean) {
+    setAutoSaveTagManifest(enabled);
+    try {
+      await window.electronAPI.settings.update({ autoSaveTagManifest: enabled });
+      showToast(
+        enabled ? 'Auto-save tags.json enabled' : 'Auto-save tags.json disabled',
+        'success'
+      );
+    } catch (err) {
+      console.error('Failed to update auto-save manifest setting:', err);
+      showToast('Failed to update auto-save setting', 'error');
+    }
+  }
+
+  async function handleExportManifest() {
+    setExportBusy(true);
+    try {
+      const res = await window.electronAPI.tags.exportManifest();
+      if (!res.canceled) {
+        showToast(`Exported ${res.count} tags to ${res.filePath}`, 'success');
+      }
+    } catch (err) {
+      console.error('Failed to export JSON manifest:', err);
+      showToast('Failed to export JSON manifest', 'error');
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
+  async function handleImportManifest() {
+    setExportBusy(true);
+    try {
+      const res = await window.electronAPI.tags.importManifest();
+      if (!res.canceled) {
+        loadStats();
+        showToast(
+          `Imported ${res.importedCount} tags (${res.skippedCount} skipped)`,
+          'success'
+        );
+      }
+    } catch (err) {
+      console.error('Failed to import JSON manifest:', err);
+      showToast('Failed to import JSON manifest', 'error');
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
+  async function handleExportCsv() {
+    setExportBusy(true);
+    try {
+      const res = await window.electronAPI.tags.exportCsv();
+      if (!res.canceled) {
+        showToast(`Exported ${res.count} tag rows to CSV`, 'success');
+      }
+    } catch (err) {
+      console.error('Failed to export CSV:', err);
+      showToast('Failed to export CSV', 'error');
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
+  async function handleExportXmp() {
+    setExportBusy(true);
+    try {
+      const res = await window.electronAPI.tags.exportXmp();
+      if (!res.canceled) {
+        showToast(`Exported ${res.count} XMP sidecar files`, 'success');
+      }
+    } catch (err) {
+      console.error('Failed to export XMP sidecars:', err);
+      showToast('Failed to export XMP sidecars', 'error');
+    } finally {
+      setExportBusy(false);
     }
   }
 
@@ -226,6 +307,77 @@ export function SettingsPage() {
                 disabled={savingKeywords}
               >
                 {savingKeywords ? 'Saving...' : 'Save Keyword Format'}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Local Tag Backup & Exports */}
+        <div className="card">
+          <div className="card-header">
+            <h3 className="card-title">Local Tag Backup &amp; Exports</h3>
+          </div>
+
+          <div className="flex flex-col gap-4">
+            <label
+              htmlFor="toggle-auto-save-manifest"
+              className="flex items-center gap-3"
+              style={{ cursor: 'pointer' }}
+            >
+              <input
+                id="toggle-auto-save-manifest"
+                type="checkbox"
+                checked={autoSaveTagManifest}
+                onChange={e => handleToggleAutoSaveManifest(e.target.checked)}
+                style={{ accentColor: 'var(--color-accent-primary)', width: 16, height: 16 }}
+              />
+              <span className="input-label">
+                Auto-save local <code>tags.json</code> manifest on tag updates
+              </span>
+            </label>
+
+            <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-tertiary)' }}>
+              Export tags to a portable <code>tags.json</code> backup (with re-import support),
+              flat CSV for spreadsheet review, or XMP sidecars with MWG face bounding boxes for
+              Lightroom, DigiKam, and Darktable.
+            </p>
+
+            <div className="flex gap-2" style={{ flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                id="btn-export-json"
+                className="btn btn-secondary btn-sm"
+                onClick={handleExportManifest}
+                disabled={exportBusy}
+              >
+                Export JSON
+              </button>
+              <button
+                type="button"
+                id="btn-import-json"
+                className="btn btn-secondary btn-sm"
+                onClick={handleImportManifest}
+                disabled={exportBusy}
+              >
+                Import JSON
+              </button>
+              <button
+                type="button"
+                id="btn-export-csv"
+                className="btn btn-secondary btn-sm"
+                onClick={handleExportCsv}
+                disabled={exportBusy}
+              >
+                Export CSV
+              </button>
+              <button
+                type="button"
+                id="btn-export-xmp"
+                className="btn btn-secondary btn-sm"
+                onClick={handleExportXmp}
+                disabled={exportBusy}
+              >
+                Export XMP Sidecars
               </button>
             </div>
           </div>

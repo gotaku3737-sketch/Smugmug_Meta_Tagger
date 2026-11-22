@@ -11,6 +11,7 @@ import { SmugMugAPI } from './services/smugmug-api';
 import { DatabaseService } from './services/database';
 import { DownloaderService } from './services/downloader';
 import { FaceEngine } from './services/face-engine';
+import { TagExporterService } from './services/tag-exporter';
 import { registerIpcHandlers } from './ipc-handlers';
 import { PERSON_PREFIX, sanitizeKeywordPrefix } from '../shared/types';
 import type { AppSettings } from '../shared/types';
@@ -120,6 +121,7 @@ let api: SmugMugAPI;
 let db: DatabaseService;
 let downloader: DownloaderService;
 let faceEngine: FaceEngine;
+let tagExporter: TagExporterService;
 let currentSettings: AppSettings;
 
 function initializeServices(): void {
@@ -130,6 +132,7 @@ function initializeServices(): void {
   db = new DatabaseService(dataDir);
   downloader = new DownloaderService(oauth, db, dataDir, currentSettings.concurrentDownloads);
   faceEngine = new FaceEngine(db, modelsDir, currentSettings.recognitionThreshold);
+  tagExporter = new TagExporterService(db, dataDir, () => currentSettings);
 
   registerIpcHandlers({
     oauth,
@@ -137,6 +140,7 @@ function initializeServices(): void {
     db,
     downloader,
     faceEngine,
+    tagExporter,
     getSettings: () => currentSettings,
     onSettingsUpdate: (partial) => {
       currentSettings = normalizeSettings(partial, currentSettings);

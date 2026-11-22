@@ -2,12 +2,14 @@
 // IPC Handler Registration
 // ============================================================
 
-import { ipcMain, BrowserWindow, shell } from 'electron';
+import { ipcMain, BrowserWindow, shell, dialog } from 'electron';
+import path from 'node:path';
 import type { OAuthService } from './services/oauth';
 import type { SmugMugAPI } from './services/smugmug-api';
 import type { DatabaseService } from './services/database';
 import type { DownloaderService } from './services/downloader';
 import type { FaceEngine } from './services/face-engine';
+import { ensureSecureDir, type TagExporterService } from './services/tag-exporter';
 import { mergeKeywords } from '../shared/types';
 import type { BoundingBox, AppSettings } from '../shared/types';
 import { sleep } from '../shared/utils';
@@ -18,12 +20,13 @@ interface Services {
   db: DatabaseService;
   downloader: DownloaderService;
   faceEngine: FaceEngine;
+  tagExporter: TagExporterService;
   getSettings: () => AppSettings;
   onSettingsUpdate: (settings: Partial<AppSettings>) => void;
 }
 
 export function registerIpcHandlers(services: Services): void {
-  const { oauth, api, db, downloader, faceEngine, getSettings, onSettingsUpdate } = services;
+  const { oauth, api, db, downloader, faceEngine, tagExporter, getSettings, onSettingsUpdate } = services;
 
 
 
@@ -36,7 +39,8 @@ export function registerIpcHandlers(services: Services): void {
     'settings:update',
     'settings:clearTrainingData',
     'settings:resetDatabase',
-    'faces:deletePerson'
+    'faces:deletePerson',
+    'tags:importManifest'
   ];
 
   // Security: Wrap all IPC handlers to prevent leaking stack traces or sensitive details
@@ -111,7 +115,8 @@ export function registerIpcHandlers(services: Services): void {
             img.thumbUrl,
             img.mediumUrl,
             img.originalUrl,
-            img.keywords
+            img.keywords,
+            img.webUri
           );
         }
         return db.getImagesByAlbum(albumKey);
@@ -202,6 +207,7 @@ export function registerIpcHandlers(services: Services): void {
   safeHandle('tags:runAutoTagger', async () => {
     try {
       await faceEngine.runAutoTagger();
+      tagExporter.syncManifestIfEnabled();
     } catch (err) {
       console.error('[IPC] tags:runAutoTagger error:', err);
       throw new Error('An error occurred during auto-tagging.');
@@ -214,6 +220,7 @@ export function registerIpcHandlers(services: Services): void {
 
   safeHandle('tags:approveMatches', async (_event, imageKey: string, approvedNames: string[]) => {
     faceEngine.approveMatches(imageKey, approvedNames);
+    tagExporter.syncManifestIfEnabled();
   });
 
   safeHandle('tags:uploadTags', async (event, imageKeys: string[]) => {
@@ -257,6 +264,103 @@ export function registerIpcHandlers(services: Services): void {
       // Respect SmugMug rate limits: ~5 req/s
       await sleep(200);
     }
+
+    tagExporter.syncManifestIfEnabled();
+  });
+
+  safeHandle('tags:exportManifest', async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+    const defaultPath = tagExporter.getDefaultManifestPath();
+    ensureSecureDir(path.dirname(defaultPath));
+
+    const dialogOptions: Electron.SaveDialogOptions = {
+      title: 'Export Tag Manifest (JSON)',
+      defaultPath,
+      filters: [{ name: 'JSON Manifest', extensions: ['json'] }],
+    };
+    const { canceled, filePath } = win
+      ? await dialog.showSaveDialog(win, dialogOptions)
+      : await dialog.showSaveDialog(dialogOptions);
+
+    if (canceled || !filePath) {
+      return { canceled: true, count: 0 };
+    }
+
+    const res = tagExporter.exportManifest(filePath);
+    return { canceled: false, filePath: res.filePath, count: res.tagCount };
+  });
+
+  safeHandle('tags:importManifest', async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+    const defaultPath = tagExporter.getDefaultManifestPath();
+    ensureSecureDir(path.dirname(defaultPath));
+
+    const dialogOptions: Electron.OpenDialogOptions = {
+      title: 'Import Tag Manifest (JSON)',
+      defaultPath,
+      properties: ['openFile'],
+      filters: [{ name: 'JSON Manifest', extensions: ['json'] }],
+    };
+    const { canceled, filePaths } = win
+      ? await dialog.showOpenDialog(win, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions);
+
+    if (canceled || filePaths.length === 0) {
+      return { canceled: true, importedCount: 0, skippedCount: 0 };
+    }
+
+    const res = tagExporter.importManifest(filePaths[0]);
+    tagExporter.syncManifestIfEnabled();
+    return {
+      canceled: false,
+      filePath: res.filePath,
+      importedCount: res.importedCount,
+      skippedCount: res.skippedCount,
+    };
+  });
+
+  safeHandle('tags:exportCsv', async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+    const defaultPath = tagExporter.getDefaultCsvPath();
+    ensureSecureDir(path.dirname(defaultPath));
+
+    const dialogOptions: Electron.SaveDialogOptions = {
+      title: 'Export Tags to CSV',
+      defaultPath,
+      filters: [{ name: 'CSV File', extensions: ['csv'] }],
+    };
+    const { canceled, filePath } = win
+      ? await dialog.showSaveDialog(win, dialogOptions)
+      : await dialog.showSaveDialog(dialogOptions);
+
+    if (canceled || !filePath) {
+      return { canceled: true, count: 0 };
+    }
+
+    const res = tagExporter.exportCsv(filePath);
+    return { canceled: false, filePath: res.filePath, count: res.tagCount };
+  });
+
+  safeHandle('tags:exportXmp', async (event, albumKey?: string) => {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+    const defaultDir = tagExporter.getDefaultXmpDir();
+    ensureSecureDir(defaultDir);
+
+    const dialogOptions: Electron.OpenDialogOptions = {
+      title: 'Select Folder for XMP Sidecar Files',
+      defaultPath: defaultDir,
+      properties: ['openDirectory', 'createDirectory'],
+    };
+    const { canceled, filePaths } = win
+      ? await dialog.showOpenDialog(win, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions);
+
+    if (canceled || filePaths.length === 0) {
+      return { canceled: true, count: 0 };
+    }
+
+    const res = tagExporter.exportXmp(filePaths[0], albumKey);
+    return { canceled: false, filePath: res.directory, count: res.filesWritten };
   });
 
   // -----------------------------------------------------------
@@ -273,6 +377,9 @@ export function registerIpcHandlers(services: Services): void {
     // Apply live settings changes
     if (partial.recognitionThreshold !== undefined) {
       faceEngine.setThreshold(partial.recognitionThreshold);
+    }
+    if (partial.autoSaveTagManifest === true) {
+      tagExporter.syncManifestIfEnabled();
     }
   });
 

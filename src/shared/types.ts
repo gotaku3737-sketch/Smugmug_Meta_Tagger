@@ -126,6 +126,7 @@ export interface ImageRecord {
   thumbUrl?: string;
   mediumUrl?: string;
   originalUrl?: string;
+  webUri?: string;
   thumbDownloaded: boolean;
   mediumDownloaded: boolean;
   facesDetected: boolean;
@@ -208,6 +209,49 @@ export interface AppSettings {
 }
 
 // -----------------------------------------------------------
+// Local Tag Manifest & Export Types
+// -----------------------------------------------------------
+
+export interface TagManifestEntry {
+  personName: string;
+  confidence: number;
+  bbox: BoundingBox;
+  approved: boolean;
+  uploaded: boolean;
+  taggedAt: string;
+}
+
+export interface TagManifestImageEntry {
+  imageKey: string;
+  albumKey: string;
+  albumTitle: string;
+  filename: string;
+  webUri: string;
+  tags: TagManifestEntry[];
+}
+
+export interface TagManifest {
+  schemaVersion: number;
+  exportedAt: string;
+  keywordFormat: KeywordFormatMode;
+  keywordPrefix: string;
+  images: Record<string, TagManifestImageEntry>;
+}
+
+export interface TagExportResult {
+  canceled: boolean;
+  filePath?: string;
+  count: number;
+}
+
+export interface TagImportResult {
+  canceled: boolean;
+  filePath?: string;
+  importedCount: number;
+  skippedCount: number;
+}
+
+// -----------------------------------------------------------
 // IPC API (exposed to renderer via contextBridge)
 // -----------------------------------------------------------
 
@@ -244,12 +288,16 @@ export interface ElectronAPI {
     onDetectionProgress(callback: (progress: FaceDetectionProgress) => void): () => void;
   };
 
-  // Auto-tagging
+  // Auto-tagging & Exports
   tags: {
     runAutoTagger(): Promise<void>;
     getUntaggedResults(): Promise<ImageRecord[]>;
     approveMatches(imageKey: string, approvedNames: string[]): Promise<void>;
     uploadTags(imageKeys: string[]): Promise<void>;
+    exportManifest(): Promise<TagExportResult>;
+    importManifest(): Promise<TagImportResult>;
+    exportCsv(): Promise<TagExportResult>;
+    exportXmp(albumKey?: string): Promise<TagExportResult>;
     onUploadProgress(callback: (progress: TagUploadProgress) => void): () => void;
   };
 

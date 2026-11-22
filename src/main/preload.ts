@@ -62,6 +62,14 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('tags:approveMatches', imageKey, approvedNames),
     uploadTags: (imageKeys: string[]) =>
       ipcRenderer.invoke('tags:uploadTags', imageKeys),
+    exportManifest: () =>
+      ipcRenderer.invoke('tags:exportManifest'),
+    importManifest: () =>
+      ipcRenderer.invoke('tags:importManifest'),
+    exportCsv: () =>
+      ipcRenderer.invoke('tags:exportCsv'),
+    exportXmp: (albumKey?: string) =>
+      ipcRenderer.invoke('tags:exportXmp', albumKey),
     onUploadProgress: (callback: (progress: TagUploadProgress) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, progress: TagUploadProgress) => callback(progress);
       ipcRenderer.on('tags:uploadProgress', handler);
