@@ -188,15 +188,16 @@ export function readTagManifest(filePath: string): TagManifest {
 // -----------------------------------------------------------
 
 export function escapeCsvCell(value: string): string {
+  const safeValue = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
   if (
-    value.includes(',') ||
-    value.includes('"') ||
-    value.includes('\n') ||
-    value.includes('\r')
+    safeValue.includes(',') ||
+    safeValue.includes('"') ||
+    safeValue.includes('\n') ||
+    safeValue.includes('\r')
   ) {
-    return `"${value.replace(/"/g, '""')}"`;
+    return `"${safeValue.replace(/"/g, '""')}"`;
   }
-  return value;
+  return safeValue;
 }
 
 export function serializeTagsToCsv(images: Record<string, TagManifestImageEntry>): string {
