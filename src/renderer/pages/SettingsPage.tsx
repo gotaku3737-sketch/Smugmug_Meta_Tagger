@@ -9,6 +9,7 @@ import {
   sanitizeKeywordPrefix,
   type DatabaseStats,
   type KeywordFormatMode,
+  type Person,
 } from '../../shared/types';
 import { useToast } from '../components/Toast';
 
@@ -18,6 +19,14 @@ export function SettingsPage() {
   const [keywordFormat, setKeywordFormat] = useState<KeywordFormatMode>('prefixed');
   const [keywordPrefix, setKeywordPrefix] = useState(PERSON_PREFIX);
   const [autoSaveTagManifest, setAutoSaveTagManifest] = useState(true);
+  const [autoPurgeMediumCache, setAutoPurgeMediumCache] = useState(false);
+  const [allowPublicUploads, setAllowPublicUploads] = useState(false);
+  const [people, setPeople] = useState<Person[]>([]);
+  const [peopleLoading, setPeopleLoading] = useState(false);
+  const [togglingPersonId, setTogglingPersonId] = useState<number | null>(null);
+  const [forgettingPersonId, setForgettingPersonId] = useState<number | null>(null);
+  const [removeFromSmugMug, setRemoveFromSmugMug] = useState(false);
+  const [forgettingBusy, setForgettingBusy] = useState(false);
   const [savingKeywords, setSavingKeywords] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -28,6 +37,7 @@ export function SettingsPage() {
   useEffect(() => {
     loadStats();
     loadSettings();
+    loadPeople();
   }, []);
 
   async function loadSettings() {
@@ -37,8 +47,23 @@ export function SettingsPage() {
       setKeywordFormat(current.keywordFormat);
       setKeywordPrefix(current.keywordPrefix);
       setAutoSaveTagManifest(current.autoSaveTagManifest);
+      setAutoPurgeMediumCache(Boolean(current.autoPurgeMediumCache));
+      setAllowPublicUploads(Boolean(current.allowPublicUploads));
     } catch (err) {
       console.error('Failed to load settings:', err);
+    }
+  }
+
+  async function loadPeople() {
+    setPeopleLoading(true);
+    try {
+      const list = await window.electronAPI.faces.getPeople();
+      setPeople(list);
+    } catch (err) {
+      console.error('Failed to load people:', err);
+      showToast('Failed to load trained people', 'error');
+    } finally {
+      setPeopleLoading(false);
     }
   }
 
@@ -79,7 +104,88 @@ export function SettingsPage() {
       );
     } catch (err) {
       console.error('Failed to update auto-save manifest setting:', err);
+      setAutoSaveTagManifest(!enabled);
       showToast('Failed to update auto-save setting', 'error');
+    }
+  }
+
+  async function handleToggleAutoPurgeMedium(enabled: boolean) {
+    setAutoPurgeMediumCache(enabled);
+    try {
+      await window.electronAPI.settings.update({ autoPurgeMediumCache: enabled });
+      showToast(
+        enabled
+          ? 'Auto-purge medium-res cache enabled'
+          : 'Auto-purge medium-res cache disabled',
+        'success'
+      );
+    } catch (err) {
+      console.error('Failed to update auto-purge setting:', err);
+      setAutoPurgeMediumCache(!enabled);
+      showToast('Failed to update medium cache setting', 'error');
+    }
+  }
+
+  async function handleToggleAllowPublicUploads(enabled: boolean) {
+    setAllowPublicUploads(enabled);
+    try {
+      await window.electronAPI.settings.update({ allowPublicUploads: enabled });
+      showToast(
+        enabled
+          ? 'Public/Unlisted uploads allowed without extra warning'
+          : 'Public/Unlisted upload confirmation enabled',
+        enabled ? 'warning' : 'success'
+      );
+    } catch (err) {
+      console.error('Failed to update public uploads setting:', err);
+      setAllowPublicUploads(!enabled);
+      showToast('Failed to update public upload setting', 'error');
+    }
+  }
+
+  async function handleTogglePersonLocalOnly(person: Person) {
+    const nextLocalOnly = !person.localOnly;
+    setTogglingPersonId(person.id);
+    try {
+      await window.electronAPI.faces.setPersonLocalOnly(person.id, nextLocalOnly);
+      setPeople(prev =>
+        prev.map(p => (p.id === person.id ? { ...p, localOnly: nextLocalOnly } : p))
+      );
+      showToast(
+        nextLocalOnly
+          ? `${person.name} marked as local-only (excluded from uploads)`
+          : `${person.name} allowed in SmugMug uploads`,
+        'info'
+      );
+    } catch (err) {
+      console.error('Failed to toggle person local-only:', err);
+      showToast(`Failed to update privacy for ${person.name}`, 'error');
+    } finally {
+      setTogglingPersonId(null);
+    }
+  }
+
+  async function handleConfirmForgetPerson(person: Person) {
+    setForgettingBusy(true);
+    try {
+      const res = await window.electronAPI.faces.forgetPerson(person.id, removeFromSmugMug);
+      setForgettingPersonId(null);
+      setRemoveFromSmugMug(false);
+      await Promise.all([loadPeople(), loadStats()]);
+      const remoteNote = removeFromSmugMug
+        ? `, ${res.removedRemote} SmugMug photo${res.removedRemote === 1 ? '' : 's'}`
+        : '';
+      showToast(
+        `Forgot ${person.name} (removed from ${res.removedLocal} local photo${res.removedLocal === 1 ? '' : 's'}${remoteNote})`,
+        'success',
+        6000
+      );
+    } catch (err) {
+      console.error('Failed to forget person:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(`Failed to forget ${person.name}: ${msg}`, 'error');
+    } finally {
+      setForgettingBusy(false);
     }
   }
 
@@ -104,6 +210,7 @@ export function SettingsPage() {
       const res = await window.electronAPI.tags.importManifest();
       if (!res.canceled) {
         loadStats();
+        loadPeople();
         showToast(
           `Imported ${res.importedCount} tags (${res.skippedCount} skipped)`,
           'success'
@@ -161,9 +268,11 @@ export function SettingsPage() {
     try {
       await window.electronAPI.settings.clearTrainingData();
       setConfirmClear(false);
-      loadStats();
+      await Promise.all([loadStats(), loadPeople()]);
+      showToast('Cleared training data and local image tags', 'success');
     } catch (err) {
       console.error('Failed to clear training data:', err);
+      showToast('Failed to clear training data', 'error');
     } finally {
       setLoading(false);
     }
@@ -174,9 +283,11 @@ export function SettingsPage() {
     try {
       await window.electronAPI.settings.resetDatabase();
       setConfirmReset(false);
-      loadStats();
+      await Promise.all([loadStats(), loadPeople()]);
+      showToast('Database and local caches reset', 'success');
     } catch (err) {
       console.error('Failed to reset database:', err);
+      showToast('Failed to reset database', 'error');
     } finally {
       setLoading(false);
     }
@@ -383,6 +494,211 @@ export function SettingsPage() {
           </div>
         </div>
 
+        {/* Privacy & Cache */}
+        <div className="card" id="card-privacy-cache">
+          <div className="card-header">
+            <h3 className="card-title">Privacy &amp; Cache</h3>
+          </div>
+
+          <div className="flex flex-col gap-4">
+            <div>
+              <label
+                htmlFor="toggle-auto-purge-medium"
+                className="flex items-center gap-3"
+                style={{ cursor: 'pointer' }}
+              >
+                <input
+                  id="toggle-auto-purge-medium"
+                  type="checkbox"
+                  checked={autoPurgeMediumCache}
+                  onChange={e => handleToggleAutoPurgeMedium(e.target.checked)}
+                  style={{ accentColor: 'var(--color-accent-primary)', width: 16, height: 16 }}
+                />
+                <span className="input-label">
+                  Auto-purge medium-res (~800px) cache after face scanning
+                </span>
+              </label>
+              <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)', marginLeft: 28 }}>
+                Deletes temporary medium-res photos from disk after face embeddings are saved locally.
+              </p>
+            </div>
+
+            <div>
+              <label
+                htmlFor="toggle-allow-public-uploads"
+                className="flex items-center gap-3"
+                style={{ cursor: 'pointer' }}
+              >
+                <input
+                  id="toggle-allow-public-uploads"
+                  type="checkbox"
+                  checked={allowPublicUploads}
+                  onChange={e => handleToggleAllowPublicUploads(e.target.checked)}
+                  style={{ accentColor: 'var(--color-warning)', width: 16, height: 16 }}
+                />
+                <span className="input-label">
+                  Allow uploads to Public/Unlisted albums without extra warning (not recommended)
+                </span>
+              </label>
+              <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)', marginLeft: 28 }}>
+                When unchecked, uploading to Public or Unlisted galleries requires explicit confirmation in the upload preview.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* People & Privacy */}
+        <div className="card" id="card-people-privacy">
+          <div className="card-header">
+            <h3 className="card-title">People &amp; Privacy</h3>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={loadPeople}
+              disabled={peopleLoading}
+              id="btn-refresh-people"
+            >
+              {peopleLoading ? 'Loading...' : '🔄 Refresh'}
+            </button>
+          </div>
+
+          {peopleLoading && people.length === 0 ? (
+            <div className="flex items-center gap-3">
+              <div className="spinner" />
+              <span className="text-muted">Loading trained people...</span>
+            </div>
+          ) : people.length === 0 ? (
+            <p style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-tertiary)' }}>
+              No trained people yet. Label faces in the Face Trainer to manage local-only status or forget people.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {people.map(person => {
+                const isForgetting = forgettingPersonId === person.id;
+                return (
+                  <div
+                    key={person.id}
+                    id={`person-privacy-row-${person.id}`}
+                    style={{
+                      padding: 'var(--space-3) var(--space-4)',
+                      background: 'var(--color-bg-tertiary)',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px solid var(--color-border)',
+                    }}
+                  >
+                    <div className="flex justify-between items-center" style={{ gap: 'var(--space-3)', flexWrap: 'wrap' }}>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span style={{ fontWeight: 500, fontSize: 'var(--font-size-sm)' }}>
+                            {person.name}
+                          </span>
+                          {person.localOnly && (
+                            <span className="badge badge-info" style={{ padding: '1px 8px', fontSize: '11px' }}>
+                              Local-only
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-tertiary)' }}>
+                          {person.descriptorCount} sample{person.descriptorCount === 1 ? '' : 's'}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        <label
+                          htmlFor={`toggle-person-local-${person.id}`}
+                          className="flex items-center gap-2"
+                          style={{ cursor: 'pointer', fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)' }}
+                        >
+                          <input
+                            id={`toggle-person-local-${person.id}`}
+                            type="checkbox"
+                            checked={Boolean(person.localOnly)}
+                            disabled={togglingPersonId === person.id || forgettingBusy}
+                            onChange={() => handleTogglePersonLocalOnly(person)}
+                            style={{ accentColor: 'var(--color-info)', width: 14, height: 14 }}
+                          />
+                          Local-only
+                        </label>
+
+                        {!isForgetting && (
+                          <button
+                            type="button"
+                            className="btn btn-danger btn-sm"
+                            id={`btn-forget-person-${person.id}`}
+                            onClick={() => {
+                              setForgettingPersonId(person.id);
+                              setRemoveFromSmugMug(false);
+                            }}
+                            disabled={forgettingBusy}
+                          >
+                            Forget Person
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {isForgetting && (
+                      <div
+                        id={`confirm-forget-panel-${person.id}`}
+                        style={{
+                          marginTop: 'var(--space-3)',
+                          paddingTop: 'var(--space-3)',
+                          borderTop: '1px solid var(--color-border)',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          flexWrap: 'wrap',
+                          gap: 'var(--space-3)',
+                        }}
+                      >
+                        <label
+                          htmlFor={`checkbox-forget-remote-${person.id}`}
+                          className="flex items-center gap-2"
+                          style={{ cursor: 'pointer', fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)' }}
+                        >
+                          <input
+                            id={`checkbox-forget-remote-${person.id}`}
+                            type="checkbox"
+                            checked={removeFromSmugMug}
+                            onChange={e => setRemoveFromSmugMug(e.target.checked)}
+                            disabled={forgettingBusy}
+                            style={{ accentColor: 'var(--color-danger)', width: 14, height: 14 }}
+                          />
+                          Also remove from SmugMug keywords
+                        </label>
+
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            className="btn btn-danger btn-sm"
+                            id={`btn-confirm-forget-${person.id}`}
+                            onClick={() => handleConfirmForgetPerson(person)}
+                            disabled={forgettingBusy}
+                          >
+                            {forgettingBusy ? 'Forgetting...' : 'Confirm'}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            id={`btn-cancel-forget-${person.id}`}
+                            onClick={() => {
+                              setForgettingPersonId(null);
+                              setRemoveFromSmugMug(false);
+                            }}
+                            disabled={forgettingBusy}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         {/* Database Statistics */}
         <div className="card">
           <div className="card-header">
@@ -427,7 +743,8 @@ export function SettingsPage() {
               <div>
                 <div style={{ fontWeight: 500, fontSize: 'var(--font-size-sm)' }}>Clear Training Data</div>
                 <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-tertiary)' }}>
-                  Removes all people and face descriptors. Albums and images are kept.
+                  Clears all people, face descriptors, and local image tags (and updates{' '}
+                  <code>tags.json</code>). Albums and downloaded images are kept.
                 </div>
               </div>
               {confirmClear ? (
@@ -453,7 +770,8 @@ export function SettingsPage() {
               <div>
                 <div style={{ fontWeight: 500, fontSize: 'var(--font-size-sm)' }}>Reset Entire Database</div>
                 <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-tertiary)' }}>
-                  Deletes ALL data — albums, images, people, and training data.
+                  Deletes all DB tables plus cached thumbnails, medium images,{' '}
+                  <code>tags.json</code>, and exports.
                 </div>
               </div>
               {confirmReset ? (
