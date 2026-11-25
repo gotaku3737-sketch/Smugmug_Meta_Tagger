@@ -3,7 +3,7 @@
 // ============================================================
 
 import type { OAuthService } from './oauth';
-import type { SmugMugAlbum, SmugMugImage } from '../../shared/types';
+import type { AlbumPrivacy, SmugMugAlbum, SmugMugImage } from '../../shared/types';
 import { sleep } from '../../shared/utils';
 
 const API_BASE = 'https://api.smugmug.com';
@@ -18,12 +18,28 @@ interface ApiAlbum {
   Name: string;
   Title: string;
   ImageCount: number;
+  Privacy?: string;
+  SecurityType?: string;
   Uris: {
     AlbumImages?: { Uri: string };
     HighlightImage?: { Uri: string };
   };
   WebUri?: string;
   LastUpdated?: string;
+}
+
+function parseAlbumPrivacy(privacy?: string, securityType?: string): AlbumPrivacy {
+  const p = (privacy || '').trim().toLowerCase();
+  const s = (securityType || '').trim().toLowerCase();
+
+  if (p === 'private') return 'Private';
+  if (p === 'unlisted') return 'Unlisted';
+  if (p === 'public') return 'Public';
+
+  if (s === 'password' || s === 'grantaccess') return 'Private';
+  if (s === 'none') return 'Public';
+
+  return 'Unknown';
 }
 
 interface ApiImage {
@@ -101,6 +117,7 @@ export class SmugMugAPI {
           albumKey: a.AlbumKey,
           title: a.Title || a.Name,
           imageCount: a.ImageCount,
+          privacy: parseAlbumPrivacy(a.Privacy, a.SecurityType),
           webUri: a.WebUri,
           lastUpdated: a.LastUpdated,
         });
@@ -240,8 +257,22 @@ export class SmugMugAPI {
   }
 
   // -----------------------------------------------------------
-  // Update Keywords
+  // Keywords (Read & Update)
   // -----------------------------------------------------------
+
+  async getImageKeywords(imageKey: string): Promise<string> {
+    const data = await this.requestWithRetry(() =>
+      this.oauth.signedGet(`${API_BASE}/api/v2/image/${encodeURIComponent(imageKey)}`)
+    ) as {
+      Response?: {
+        Image?: {
+          Keywords?: string;
+        };
+      };
+    };
+
+    return data?.Response?.Image?.Keywords || '';
+  }
 
   async updateImageKeywords(imageKey: string, keywords: string): Promise<void> {
     await this.requestWithRetry(() =>

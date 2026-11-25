@@ -17,16 +17,27 @@ export class FaceEngine {
   private modelsDir: string;
   private isLoaded = false;
   private threshold: number;
+  private shouldAutoPurgeMedium?: () => boolean;
   private progressCallback?: (progress: FaceDetectionProgress) => void;
 
-  constructor(db: DatabaseService, modelsDir: string, threshold = 0.6) {
+  constructor(
+    db: DatabaseService,
+    modelsDir: string,
+    threshold = 0.6,
+    shouldAutoPurgeMedium?: () => boolean
+  ) {
     this.db = db;
     this.modelsDir = modelsDir;
     this.threshold = threshold;
+    this.shouldAutoPurgeMedium = shouldAutoPurgeMedium;
   }
 
   setThreshold(threshold: number): void {
     this.threshold = threshold;
+  }
+
+  setAutoPurgeMedium(shouldAutoPurgeMedium: () => boolean): void {
+    this.shouldAutoPurgeMedium = shouldAutoPurgeMedium;
   }
 
   onProgress(callback: (progress: FaceDetectionProgress) => void): void {
@@ -140,7 +151,9 @@ export class FaceEngine {
       await Promise.all(batch.map(async img => {
         try {
           const faces = await this.detectFaces(img.mediumPath!);
+          this.db.saveDetectedFaces(img.imageKey, faces);
           this.db.markFacesDetected(img.imageKey, faces.length);
+          this.removeMediumFileIfPurgeEnabled(img.imageKey, img.mediumPath);
 
           if (faces.length > 0) {
             totalFacesFound += faces.length;
@@ -185,12 +198,7 @@ export class FaceEngine {
     const bestFace = this.findBestMatchingFace(faces, bbox);
 
     if (!bestFace) {
-      // Fallback: if we can't detect a face in the crop, store a zero descriptor
-      // (the user manually labelled it, so we still save the training sample)
-      console.warn(`[FaceEngine] No face detected at bbox for ${imageKey}, using zeros`);
-      const personId = this.db.addPerson(personName);
-      this.db.addFaceDescriptor(personId, new Float32Array(128), imageKey, bbox);
-      return;
+      throw new Error('No face detected near the selected region; please try a clearer photo');
     }
 
     const personId = this.db.addPerson(personName);
@@ -217,21 +225,22 @@ export class FaceEngine {
     const labeledDescriptors = this.buildLabeledDescriptors(allDescriptors);
     const faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, this.threshold);
 
-    // Get all images with detected faces that haven't been tagged yet
-    const images = this.db.getUntaggedImagesWithFaces
-      ? this.db.getUntaggedImagesWithFaces()
-      : [];
-
-    // Also process images with faces detected but no detected_people yet
-    const unprocessed = this.db.getImagesWithFacesForMatching();
+    // Match against stored face descriptors (falling back to SSD MobileNet v1 only when missing)
+    const unprocessed = this.db.getImagesWithStoredFaces();
 
     console.log(`[FaceEngine] Running auto-tagger on ${unprocessed.length} images`);
 
     for (const img of unprocessed) {
-      if (!img.mediumPath || !img.mediumDownloaded) continue;
-
       try {
-        const faces = await this.detectFaces(img.mediumPath);
+        let faces = this.db.getDetectedFaces(img.imageKey);
+
+        if (faces.length === 0 && img.facesDetected && img.mediumDownloaded && img.mediumPath) {
+          faces = await this.detectFaces(img.mediumPath);
+          if (faces.length > 0) {
+            this.db.saveDetectedFaces(img.imageKey, faces);
+          }
+        }
+
         if (faces.length === 0) continue;
 
         const matches: FaceMatch[] = faces.map(face => {
@@ -282,6 +291,22 @@ export class FaceEngine {
   // -----------------------------------------------------------
   // Private Helpers
   // -----------------------------------------------------------
+
+  private removeMediumFileIfPurgeEnabled(imageKey: string, mediumPath?: string): void {
+    if (!this.shouldAutoPurgeMedium?.() || !mediumPath) return;
+
+    try {
+      fs.unlinkSync(mediumPath);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code !== 'ENOENT') {
+        console.warn(`[FaceEngine] Failed to purge medium cache for ${imageKey}:`, err);
+        return;
+      }
+    }
+
+    this.db.clearMediumPath(imageKey);
+  }
 
   private findBestMatchingFace(faces: DetectedFace[], targetBbox: BoundingBox): DetectedFace | undefined {
     if (faces.length === 0) return undefined;

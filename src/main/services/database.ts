@@ -7,8 +7,10 @@ import path from 'node:path';
 import fs from 'node:fs';
 import type {
   Person,
+  AlbumPrivacy,
   AlbumRecord,
   ImageRecord,
+  DetectedFace,
   FaceMatch,
   ImageTagRow,
   DatabaseStats,
@@ -55,6 +57,7 @@ export class DatabaseService {
       CREATE TABLE IF NOT EXISTS people (
         id INTEGER PRIMARY KEY,
         name TEXT UNIQUE NOT NULL,
+        local_only INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
 
@@ -74,6 +77,8 @@ export class DatabaseService {
         title TEXT NOT NULL,
         image_count INTEGER DEFAULT 0,
         cover_image_url TEXT,
+        privacy TEXT DEFAULT 'Unknown',
+        local_only INTEGER DEFAULT 0,
         thumbs_downloaded INTEGER DEFAULT 0,
         synced_at DATETIME
       );
@@ -119,11 +124,35 @@ export class DatabaseService {
       CREATE INDEX IF NOT EXISTS idx_image_tags_image ON image_tags(image_key);
       CREATE INDEX IF NOT EXISTS idx_image_tags_person ON image_tags(person_name);
       CREATE INDEX IF NOT EXISTS idx_image_tags_uploaded ON image_tags(uploaded);
+
+      CREATE TABLE IF NOT EXISTS detected_faces (
+        id INTEGER PRIMARY KEY,
+        image_key TEXT NOT NULL REFERENCES images(image_key) ON DELETE CASCADE,
+        descriptor BLOB NOT NULL,
+        bbox_x REAL, bbox_y REAL,
+        bbox_w REAL, bbox_h REAL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_detected_faces_image ON detected_faces(image_key);
     `);
 
     const imageCols = this.db.prepare('PRAGMA table_info(images)').all() as { name: string }[];
     if (!imageCols.some(c => c.name === 'web_uri')) {
       this.db.exec('ALTER TABLE images ADD COLUMN web_uri TEXT');
+    }
+
+    const albumCols = this.db.prepare('PRAGMA table_info(albums)').all() as { name: string }[];
+    if (!albumCols.some(c => c.name === 'privacy')) {
+      this.db.exec("ALTER TABLE albums ADD COLUMN privacy TEXT DEFAULT 'Unknown'");
+    }
+    if (!albumCols.some(c => c.name === 'local_only')) {
+      this.db.exec('ALTER TABLE albums ADD COLUMN local_only INTEGER DEFAULT 0');
+    }
+
+    const peopleCols = this.db.prepare('PRAGMA table_info(people)').all() as { name: string }[];
+    if (!peopleCols.some(c => c.name === 'local_only')) {
+      this.db.exec('ALTER TABLE people ADD COLUMN local_only INTEGER DEFAULT 0');
     }
   }
 
@@ -131,26 +160,109 @@ export class DatabaseService {
   // Albums
   // -----------------------------------------------------------
 
-  upsertAlbum(albumKey: string, title: string, imageCount: number, coverImageUrl?: string): void {
+  upsertAlbum(
+    albumKey: string,
+    title: string,
+    imageCount: number,
+    coverImageUrl?: string,
+    privacy?: AlbumPrivacy
+  ): void {
     this.db.prepare(`
-      INSERT INTO albums (album_key, title, image_count, cover_image_url, synced_at)
-      VALUES (?, ?, ?, ?, datetime('now'))
+      INSERT INTO albums (album_key, title, image_count, cover_image_url, privacy, synced_at)
+      VALUES (?, ?, ?, ?, ?, datetime('now'))
       ON CONFLICT(album_key) DO UPDATE SET
         title = excluded.title,
         image_count = excluded.image_count,
-        cover_image_url = excluded.cover_image_url,
+        cover_image_url = COALESCE(excluded.cover_image_url, albums.cover_image_url),
+        privacy = COALESCE(?, albums.privacy),
         synced_at = datetime('now')
-    `).run(albumKey, title, imageCount, coverImageUrl || null);
+    `).run(
+      albumKey,
+      title,
+      imageCount,
+      coverImageUrl || null,
+      privacy ?? 'Unknown',
+      privacy ?? null
+    );
+  }
+
+  private mapAlbumRow(r: {
+    id: number;
+    albumKey: string;
+    title: string;
+    imageCount: number;
+    coverImageUrl?: string;
+    privacy?: string | null;
+    localOnly: number;
+    thumbsDownloaded: number;
+    syncedAt?: string;
+  }): AlbumRecord {
+    return {
+      id: r.id,
+      albumKey: r.albumKey,
+      title: r.title,
+      imageCount: r.imageCount,
+      coverImageUrl: r.coverImageUrl,
+      privacy: (r.privacy as AlbumPrivacy) || 'Unknown',
+      localOnly: Boolean(r.localOnly),
+      thumbsDownloaded: Boolean(r.thumbsDownloaded),
+      syncedAt: r.syncedAt,
+    };
   }
 
   getAllAlbums(): AlbumRecord[] {
-    return this.db.prepare(`
+    const rows = this.db.prepare(`
       SELECT id, album_key as albumKey, title, image_count as imageCount,
              cover_image_url as coverImageUrl,
+             privacy,
+             local_only as localOnly,
              thumbs_downloaded as thumbsDownloaded,
              synced_at as syncedAt
       FROM albums ORDER BY title
-    `).all() as AlbumRecord[];
+    `).all() as Array<{
+      id: number;
+      albumKey: string;
+      title: string;
+      imageCount: number;
+      coverImageUrl?: string;
+      privacy?: string | null;
+      localOnly: number;
+      thumbsDownloaded: number;
+      syncedAt?: string;
+    }>;
+
+    return rows.map(r => this.mapAlbumRow(r));
+  }
+
+  getAlbum(albumKey: string): AlbumRecord | undefined {
+    const row = this.db.prepare(`
+      SELECT id, album_key as albumKey, title, image_count as imageCount,
+             cover_image_url as coverImageUrl,
+             privacy,
+             local_only as localOnly,
+             thumbs_downloaded as thumbsDownloaded,
+             synced_at as syncedAt
+      FROM albums WHERE album_key = ?
+    `).get(albumKey) as {
+      id: number;
+      albumKey: string;
+      title: string;
+      imageCount: number;
+      coverImageUrl?: string;
+      privacy?: string | null;
+      localOnly: number;
+      thumbsDownloaded: number;
+      syncedAt?: string;
+    } | undefined;
+
+    return row ? this.mapAlbumRow(row) : undefined;
+  }
+
+  setAlbumLocalOnly(albumKey: string, localOnly: boolean): void {
+    this.db.prepare('UPDATE albums SET local_only = ? WHERE album_key = ?').run(
+      localOnly ? 1 : 0,
+      albumKey
+    );
   }
 
   markAlbumThumbsDownloaded(albumKey: string): void {
@@ -196,56 +308,26 @@ export class DatabaseService {
     );
   }
 
-  getImagesByAlbum(albumKey: string): ImageRecord[] {
-    const rows = this.db.prepare(`
-      SELECT id, image_key as imageKey, album_key as albumKey, filename,
-             thumb_path as thumbPath, medium_path as mediumPath,
-             thumb_url as thumbUrl, medium_url as mediumUrl, original_url as originalUrl,
-             web_uri as webUri,
-             thumb_downloaded as thumbDownloaded, medium_downloaded as mediumDownloaded,
-             faces_detected as facesDetected, face_count as faceCount,
-             tags_uploaded as tagsUploaded, existing_keywords as existingKeywords,
-             detected_people as detectedPeople, created_at as createdAt
-      FROM images WHERE album_key = ? ORDER BY filename
-    `).all(albumKey) as (Omit<ImageRecord, 'thumbDownloaded' | 'mediumDownloaded' | 'facesDetected' | 'tagsUploaded' | 'detectedPeople'> & {
+  private static readonly IMAGE_COLUMNS = `
+    id, image_key as imageKey, album_key as albumKey, filename,
+    thumb_path as thumbPath, medium_path as mediumPath,
+    thumb_url as thumbUrl, medium_url as mediumUrl, original_url as originalUrl,
+    web_uri as webUri,
+    thumb_downloaded as thumbDownloaded, medium_downloaded as mediumDownloaded,
+    faces_detected as facesDetected, face_count as faceCount,
+    tags_uploaded as tagsUploaded, existing_keywords as existingKeywords,
+    detected_people as detectedPeople, created_at as createdAt
+  `;
+
+  private mapImageRow(
+    r: Omit<ImageRecord, 'thumbDownloaded' | 'mediumDownloaded' | 'facesDetected' | 'tagsUploaded' | 'detectedPeople'> & {
       thumbDownloaded: number;
       mediumDownloaded: number;
       facesDetected: number;
       tagsUploaded: number;
       detectedPeople: string | null;
-    })[];
-
-    return rows.map(r => ({
-      ...r,
-      thumbDownloaded: !!r.thumbDownloaded,
-      mediumDownloaded: !!r.mediumDownloaded,
-      facesDetected: !!r.facesDetected,
-      tagsUploaded: !!r.tagsUploaded,
-      detectedPeople: r.detectedPeople ? JSON.parse(r.detectedPeople) : undefined,
-    }));
-  }
-
-  getImage(imageKey: string): ImageRecord | undefined {
-    const r = this.db.prepare(`
-      SELECT id, image_key as imageKey, album_key as albumKey, filename,
-             thumb_path as thumbPath, medium_path as mediumPath,
-             thumb_url as thumbUrl, medium_url as mediumUrl, original_url as originalUrl,
-             web_uri as webUri,
-             thumb_downloaded as thumbDownloaded, medium_downloaded as mediumDownloaded,
-             faces_detected as facesDetected, face_count as faceCount,
-             tags_uploaded as tagsUploaded, existing_keywords as existingKeywords,
-             detected_people as detectedPeople, created_at as createdAt
-      FROM images WHERE image_key = ?
-    `).get(imageKey) as (Omit<ImageRecord, 'thumbDownloaded' | 'mediumDownloaded' | 'facesDetected' | 'tagsUploaded' | 'detectedPeople'> & {
-      thumbDownloaded: number;
-      mediumDownloaded: number;
-      facesDetected: number;
-      tagsUploaded: number;
-      detectedPeople: string | null;
-    }) | undefined;
-
-    if (!r) return undefined;
-
+    }
+  ): ImageRecord {
     return {
       ...r,
       thumbDownloaded: !!r.thumbDownloaded,
@@ -254,6 +336,24 @@ export class DatabaseService {
       tagsUploaded: !!r.tagsUploaded,
       detectedPeople: r.detectedPeople ? JSON.parse(r.detectedPeople) : undefined,
     };
+  }
+
+  getImagesByAlbum(albumKey: string): ImageRecord[] {
+    const rows = this.db.prepare(`
+      SELECT ${DatabaseService.IMAGE_COLUMNS}
+      FROM images WHERE album_key = ? ORDER BY filename
+    `).all(albumKey) as Parameters<DatabaseService['mapImageRow']>[0][];
+
+    return rows.map(r => this.mapImageRow(r));
+  }
+
+  getImage(imageKey: string): ImageRecord | undefined {
+    const r = this.db.prepare(`
+      SELECT ${DatabaseService.IMAGE_COLUMNS}
+      FROM images WHERE image_key = ?
+    `).get(imageKey) as Parameters<DatabaseService['mapImageRow']>[0] | undefined;
+
+    return r ? this.mapImageRow(r) : undefined;
   }
 
   markThumbDownloaded(imageKey: string, localPath: string): void {
@@ -266,6 +366,12 @@ export class DatabaseService {
     this.db.prepare(`
       UPDATE images SET medium_downloaded = 1, medium_path = ? WHERE image_key = ?
     `).run(localPath, imageKey);
+  }
+
+  clearMediumPath(imageKey: string): void {
+    this.db.prepare(`
+      UPDATE images SET medium_path = NULL, medium_downloaded = 0 WHERE image_key = ?
+    `).run(imageKey);
   }
 
   markFacesDetected(imageKey: string, faceCount: number, detectedPeople?: FaceMatch[]): void {
@@ -292,65 +398,92 @@ export class DatabaseService {
 
   getUntaggedImagesWithFaces(): ImageRecord[] {
     const rows = this.db.prepare(`
-      SELECT id, image_key as imageKey, album_key as albumKey, filename,
-             thumb_path as thumbPath, medium_path as mediumPath,
-             thumb_url as thumbUrl, medium_url as mediumUrl, original_url as originalUrl,
-             web_uri as webUri,
-             thumb_downloaded as thumbDownloaded, medium_downloaded as mediumDownloaded,
-             faces_detected as facesDetected, face_count as faceCount,
-             tags_uploaded as tagsUploaded, existing_keywords as existingKeywords,
-             detected_people as detectedPeople, created_at as createdAt
+      SELECT ${DatabaseService.IMAGE_COLUMNS}
       FROM images
       WHERE faces_detected = 1 AND tags_uploaded = 0 AND detected_people IS NOT NULL
       ORDER BY album_key, filename
-    `).all() as (Omit<ImageRecord, 'thumbDownloaded' | 'mediumDownloaded' | 'facesDetected' | 'tagsUploaded' | 'detectedPeople'> & {
-      thumbDownloaded: number;
-      mediumDownloaded: number;
-      facesDetected: number;
-      tagsUploaded: number;
-      detectedPeople: string | null;
-    })[];
+    `).all() as Parameters<DatabaseService['mapImageRow']>[0][];
 
-    return rows.map(r => ({
-      ...r,
-      thumbDownloaded: !!r.thumbDownloaded,
-      mediumDownloaded: !!r.mediumDownloaded,
-      facesDetected: !!r.facesDetected,
-      tagsUploaded: !!r.tagsUploaded,
-      detectedPeople: r.detectedPeople ? JSON.parse(r.detectedPeople) : undefined,
-    }));
+    return rows.map(r => this.mapImageRow(r));
   }
 
   /** Images that have faces detected but haven't been matched against trained people yet. */
   getImagesWithFacesForMatching(): ImageRecord[] {
     const rows = this.db.prepare(`
-      SELECT id, image_key as imageKey, album_key as albumKey, filename,
-             thumb_path as thumbPath, medium_path as mediumPath,
-             thumb_url as thumbUrl, medium_url as mediumUrl, original_url as originalUrl,
-             web_uri as webUri,
-             thumb_downloaded as thumbDownloaded, medium_downloaded as mediumDownloaded,
-             faces_detected as facesDetected, face_count as faceCount,
-             tags_uploaded as tagsUploaded, existing_keywords as existingKeywords,
-             detected_people as detectedPeople, created_at as createdAt
+      SELECT ${DatabaseService.IMAGE_COLUMNS}
       FROM images
       WHERE faces_detected = 1 AND medium_downloaded = 1 AND tags_uploaded = 0
       ORDER BY album_key, filename
-    `).all() as (Omit<ImageRecord, 'thumbDownloaded' | 'mediumDownloaded' | 'facesDetected' | 'tagsUploaded' | 'detectedPeople'> & {
-      thumbDownloaded: number;
-      mediumDownloaded: number;
-      facesDetected: number;
-      tagsUploaded: number;
-      detectedPeople: string | null;
-    })[];
+    `).all() as Parameters<DatabaseService['mapImageRow']>[0][];
 
-    return rows.map(r => ({
-      ...r,
-      thumbDownloaded: !!r.thumbDownloaded,
-      mediumDownloaded: !!r.mediumDownloaded,
-      facesDetected: !!r.facesDetected,
-      tagsUploaded: !!r.tagsUploaded,
-      detectedPeople: r.detectedPeople ? JSON.parse(r.detectedPeople) : undefined,
-    }));
+    return rows.map(r => this.mapImageRow(r));
+  }
+
+  /** Images eligible for matching using stored detected_faces (even after medium cache purge). */
+  getImagesWithStoredFaces(): ImageRecord[] {
+    const rows = this.db.prepare(`
+      SELECT ${DatabaseService.IMAGE_COLUMNS}
+      FROM images
+      WHERE faces_detected = 1 AND tags_uploaded = 0
+      ORDER BY album_key, filename
+    `).all() as Parameters<DatabaseService['mapImageRow']>[0][];
+
+    return rows.map(r => this.mapImageRow(r));
+  }
+
+  saveDetectedFaces(imageKey: string, faces: DetectedFace[]): void {
+    const deleteOld = this.db.prepare('DELETE FROM detected_faces WHERE image_key = ?');
+    const insert = this.db.prepare(`
+      INSERT INTO detected_faces (image_key, descriptor, bbox_x, bbox_y, bbox_w, bbox_h)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+
+    const transaction = this.db.transaction(() => {
+      deleteOld.run(imageKey);
+      for (const face of faces) {
+        const buffer = Buffer.from(
+          face.descriptor.buffer,
+          face.descriptor.byteOffset,
+          face.descriptor.byteLength
+        );
+        insert.run(
+          imageKey,
+          buffer,
+          face.bbox.x,
+          face.bbox.y,
+          face.bbox.width,
+          face.bbox.height
+        );
+      }
+    });
+
+    transaction();
+  }
+
+  getDetectedFaces(imageKey: string): DetectedFace[] {
+    const rows = this.db.prepare(`
+      SELECT descriptor, bbox_x, bbox_y, bbox_w, bbox_h
+      FROM detected_faces
+      WHERE image_key = ?
+      ORDER BY id
+    `).all(imageKey) as {
+      descriptor: Buffer;
+      bbox_x: number;
+      bbox_y: number;
+      bbox_w: number;
+      bbox_h: number;
+    }[];
+
+    return rows.map(r => {
+      const aligned = r.descriptor.buffer.slice(
+        r.descriptor.byteOffset,
+        r.descriptor.byteOffset + r.descriptor.byteLength
+      );
+      return {
+        descriptor: new Float32Array(aligned),
+        bbox: { x: r.bbox_x, y: r.bbox_y, width: r.bbox_w, height: r.bbox_h },
+      };
+    });
   }
 
   /** Overwrite the detected_people field for an image (used to approve/reject matches). */
@@ -451,6 +584,30 @@ export class DatabaseService {
       FROM image_tags WHERE image_key = ?
       ORDER BY confidence DESC
     `).all(imageKey) as ImageTagRow[];
+  }
+
+  /** Return approved tag rows for a single image. */
+  getApprovedTagsForImage(imageKey: string): ImageTagRow[] {
+    return this.db.prepare(`
+      SELECT id, image_key as imageKey, person_name as personName,
+             confidence, bbox_x as bboxX, bbox_y as bboxY,
+             bbox_w as bboxW, bbox_h as bboxH,
+             approved, uploaded, tagged_at as taggedAt
+      FROM image_tags
+      WHERE image_key = ? AND approved = 1
+      ORDER BY confidence DESC
+    `).all(imageKey) as ImageTagRow[];
+  }
+
+  /** Return distinct approved person names for a single image. */
+  getApprovedPersonNamesForImage(imageKey: string): string[] {
+    const rows = this.db.prepare(`
+      SELECT DISTINCT person_name as personName
+      FROM image_tags
+      WHERE image_key = ? AND approved = 1
+      ORDER BY id
+    `).all(imageKey) as { personName: string }[];
+    return rows.map(r => r.personName);
   }
 
   /** Return all tagged images and their tag metadata formatted for manifest/CSV/XMP export. */
@@ -597,38 +754,107 @@ export class DatabaseService {
   // -----------------------------------------------------------
 
   addPerson(name: string): number {
-    const result = this.db.prepare(`
+    this.db.prepare(`
       INSERT INTO people (name) VALUES (?)
-      ON CONFLICT(name) DO UPDATE SET name = excluded.name
+      ON CONFLICT(name) DO NOTHING
     `).run(name);
-    return Number(result.lastInsertRowid);
+    const row = this.db.prepare('SELECT id FROM people WHERE name = ?').get(name) as { id: number };
+    return row.id;
+  }
+
+  getPersonById(personId: number): Person | undefined {
+    const row = this.db.prepare(`
+      SELECT p.id, p.name, p.local_only as localOnly, p.created_at as createdAt,
+             COUNT(fd.id) as descriptorCount
+      FROM people p
+      LEFT JOIN face_descriptors fd ON fd.person_id = p.id
+      WHERE p.id = ?
+      GROUP BY p.id
+    `).get(personId) as (Omit<Person, 'localOnly'> & { localOnly: number }) | undefined;
+    if (!row) return undefined;
+    return {
+      ...row,
+      localOnly: Boolean(row.localOnly),
+    };
   }
 
   getPersonByName(name: string): Person | undefined {
     const row = this.db.prepare(`
-      SELECT p.id, p.name, p.created_at as createdAt,
+      SELECT p.id, p.name, p.local_only as localOnly, p.created_at as createdAt,
              COUNT(fd.id) as descriptorCount
       FROM people p
       LEFT JOIN face_descriptors fd ON fd.person_id = p.id
       WHERE p.name = ?
       GROUP BY p.id
-    `).get(name) as Person | undefined;
-    return row;
+    `).get(name) as (Omit<Person, 'localOnly'> & { localOnly: number }) | undefined;
+    if (!row) return undefined;
+    return {
+      ...row,
+      localOnly: Boolean(row.localOnly),
+    };
   }
 
   getAllPeople(): Person[] {
-    return this.db.prepare(`
-      SELECT p.id, p.name, p.created_at as createdAt,
+    const rows = this.db.prepare(`
+      SELECT p.id, p.name, p.local_only as localOnly, p.created_at as createdAt,
              COUNT(fd.id) as descriptorCount
       FROM people p
       LEFT JOIN face_descriptors fd ON fd.person_id = p.id
       GROUP BY p.id
       ORDER BY p.name
-    `).all() as Person[];
+    `).all() as (Omit<Person, 'localOnly'> & { localOnly: number })[];
+    return rows.map(row => ({
+      ...row,
+      localOnly: Boolean(row.localOnly),
+    }));
+  }
+
+  setPersonLocalOnly(personId: number, localOnly: boolean): void {
+    this.db.prepare('UPDATE people SET local_only = ? WHERE id = ?').run(
+      localOnly ? 1 : 0,
+      personId
+    );
   }
 
   deletePerson(personId: number): void {
     this.db.prepare('DELETE FROM people WHERE id = ?').run(personId);
+  }
+
+  forgetPersonLocal(personId: number): { personName: string; affectedImageKeys: string[] } {
+    const transaction = this.db.transaction(() => {
+      const person = this.getPersonById(personId);
+      if (!person) {
+        throw new Error(`Person not found: ${personId}`);
+      }
+
+      const affectedRows = this.db.prepare(`
+        SELECT DISTINCT image_key FROM image_tags WHERE person_name = ?
+      `).all(person.name) as { image_key: string }[];
+      const affectedImageKeys = affectedRows.map(r => r.image_key);
+
+      // Deleting from people cascades to face_descriptors
+      this.db.prepare('DELETE FROM people WHERE id = ?').run(personId);
+      this.db.prepare('DELETE FROM image_tags WHERE person_name = ?').run(person.name);
+
+      const getDetectedStmt = this.db.prepare('SELECT detected_people FROM images WHERE image_key = ?');
+      const updateDetectedStmt = this.db.prepare('UPDATE images SET detected_people = ? WHERE image_key = ?');
+
+      for (const imageKey of affectedImageKeys) {
+        const imgRow = getDetectedStmt.get(imageKey) as { detected_people: string | null } | undefined;
+        if (!imgRow?.detected_people) continue;
+        try {
+          const parsed = JSON.parse(imgRow.detected_people) as FaceMatch[];
+          const remaining = parsed.filter(m => m.personName !== person.name);
+          updateDetectedStmt.run(remaining.length > 0 ? JSON.stringify(remaining) : null, imageKey);
+        } catch {
+          // Ignore malformed JSON if any
+        }
+      }
+
+      return { personName: person.name, affectedImageKeys };
+    });
+
+    return transaction();
   }
 
   addFaceDescriptor(
@@ -701,12 +927,14 @@ export class DatabaseService {
   // -----------------------------------------------------------
 
   clearTrainingData(): void {
+    this.db.exec('DELETE FROM image_tags');
     this.db.exec('DELETE FROM face_descriptors');
     this.db.exec('DELETE FROM people');
-    this.db.exec("UPDATE images SET faces_detected = 0, face_count = 0, detected_people = NULL, tags_uploaded = 0");
+    this.db.exec('UPDATE images SET faces_detected = 0, face_count = 0, detected_people = NULL, tags_uploaded = 0');
   }
 
   resetDatabase(): void {
+    this.db.exec('DROP TABLE IF EXISTS detected_faces');
     this.db.exec('DROP TABLE IF EXISTS image_tags');
     this.db.exec('DROP TABLE IF EXISTS face_descriptors');
     this.db.exec('DROP TABLE IF EXISTS people');

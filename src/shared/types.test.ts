@@ -6,6 +6,7 @@ import {
   formatPersonKeyword,
   parsePersonKeywords,
   mergeKeywords,
+  removePersonKeyword,
 } from './types';
 
 describe('Keyword Helpers', () => {
@@ -128,6 +129,40 @@ describe('Keyword Helpers', () => {
     test('should deduplicate duplicate entries in personNames', () => {
       const result = mergeKeywords('vacation', ['Jane Smith', '  jane smith ', 'John Doe', '']);
       assert.strictEqual(result, 'vacation; Person:Jane Smith; Person:John Doe');
+    });
+  });
+
+  describe('removePersonKeyword', () => {
+    test('should remove only the target prefixed person keyword while preserving others', () => {
+      const existing = 'vacation; Person:Jane Smith; Person:John Doe; hawaii';
+      const result = removePersonKeyword(existing, 'Jane Smith');
+      assert.deepStrictEqual(result, {
+        keywords: 'vacation; Person:John Doe; hawaii',
+        removed: true,
+      });
+    });
+
+    test('should support plain mode and custom prefixes without removing non-matching keywords', () => {
+      const plainRes = removePersonKeyword('vacation; Jane Smith; John Doe', 'jane smith', { mode: 'plain' });
+      assert.deepStrictEqual(plainRes, {
+        keywords: 'vacation; John Doe',
+        removed: true,
+      });
+
+      const customRes = removePersonKeyword('Family:Jane Smith; Person:Jane Smith', 'Jane Smith', {
+        mode: 'prefixed',
+        prefix: 'Family:',
+      });
+      assert.deepStrictEqual(customRes, {
+        keywords: 'Person:Jane Smith',
+        removed: true,
+      });
+
+      const missingRes = removePersonKeyword('vacation; Person:John Doe', 'Jane Smith');
+      assert.deepStrictEqual(missingRes, {
+        keywords: 'vacation; Person:John Doe',
+        removed: false,
+      });
     });
   });
 });
