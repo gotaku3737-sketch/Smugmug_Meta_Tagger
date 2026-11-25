@@ -299,6 +299,18 @@ This will execute the Cucumber test runner and display the results of all scenar
 
 ---
 
+## Security & Privacy
+
+- **100% local face recognition** — All face detection and 128-dim embedding matching runs locally on your machine using bundled models (`@vladmandic/face-api`). Photos and biometric descriptors are never sent to external AI services.
+- **OS keychain credential storage** — SmugMug API keys and OAuth 1.0a tokens are encrypted via Electron `safeStorage` (`credentials.json`, `0o600`).
+- **Local data protection** — SQLite (`smugmug_tagger.db`), `tags.json`, exports, and cached images are stored under `smugmug-data/` with `0o600`/`0o700` permissions; OS full-disk encryption (FileVault / BitLocker / LUKS) is recommended.
+- **Cloud gallery visibility caution** — Uploading person names to SmugMug `Keywords` on **Public** or **Unlisted** galleries makes those names visible and searchable on SmugMug.
+- **Electron hardening** — Uses `contextIsolation: true`, `sandbox: true`, `nodeIntegration: false`, Electron Fuses, strict permission/navigation denials, and CSP headers.
+
+See [SECURITY.md](SECURITY.md) for the full security & privacy policy and [plan.md](plan.md) for the v2 privacy, security hardening, and reliability roadmap.
+
+---
+
 ## Troubleshooting
 
 **App won't connect to SmugMug**

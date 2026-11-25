@@ -11,14 +11,11 @@
     "make": "electron-forge make",
     "publish": "electron-forge publish",
     "lint": "eslint --ext .ts,.tsx .",
-    "test": "tsx --test src/shared/types.test.ts src/main/services/tag-exporter.test.ts",
+    "test": "tsx --test src/shared/types.test.ts src/main/services/tag-exporter.test.ts src/main/services/oauth.test.ts",
     "test:bdd": "cucumber-js"
   },
   "keywords": [],
-  "author": {
-    "name": "Dom",
-    "email": "gotaku3737@gmail.com"
-  },
+  "author": "Dom",
   "license": "MIT",
   "devDependencies": {
     "@cucumber/cucumber": "^12.9.0",

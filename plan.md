@@ -123,10 +123,81 @@ All behaviors below are aligned with the Spec-Driven Development (BDD) specifica
 
 ---
 
-## Phased Rollout
+## Phased Rollout (v1 — Completed)
 
-| Phase | Scope | Verification |
-|-------|-------|--------------|
-| **Phase 1: Specs & Docs** | Update `README.md`, create `plan.md`, align `tag_upload.feature` and add `local_tag_export.feature` + step definitions | `npm run test:bdd` |
-| **Phase 2: Keyword Format Config** | Extend `AppSettings`, update `mergeKeywords` helpers + unit tests, wire into `SettingsPage` and upload handler | `npm test` + `tag_upload.feature` |
-| **Phase 3: Local Manifest & Exports** | Implement `src/main/services/tag-exporter.ts`, wire auto-save hook on tag mutations, add IPC handlers & UI export/import buttons | `local_tag_export.feature` + manual E2E check |
+| Phase | Scope | Status | Verification |
+|-------|-------|--------|--------------|
+| **Phase 1: Specs & Docs** | Update `README.md`, create `plan.md`, align `tag_upload.feature` and add `local_tag_export.feature` + step definitions | **Completed** (`17f9344`) | `npm run test:bdd` |
+| **Phase 2: Keyword Format Config** | Extend `AppSettings`, update `mergeKeywords` helpers + unit tests, wire into `SettingsPage` and upload handler | **Completed** (`a608187`) | `npm test` + `tag_upload.feature` |
+| **Phase 3: Local Manifest & Exports** | Implement `src/main/services/tag-exporter.ts`, wire auto-save hook on tag mutations, add IPC handlers & UI export/import buttons | **Completed** (`62cf424`) | `local_tag_export.feature` + manual E2E check |
+
+---
+
+## Roadmap v2: Privacy, Security Hardening & Reliability
+
+**Target Audience & Distribution Model:** Personal / single-user desktop tool for managing your own SmugMug library (open-sourced as bring-your-own SmugMug API key for technical users). All face processing remains 100% local on-device.
+
+---
+
+### Part 3: Cloud & Local Privacy Controls (Phase 4)
+
+#### SmugMug Album Privacy Guardrails
+- **Track Album Visibility:** Fetch and persist each album's SmugMug visibility (`Privacy` / `SecurityType` — e.g., `Public`, `Unlisted`, `Private`) in `src/main/services/smugmug-api.ts` and the `albums` table in `src/main/services/database.ts`.
+- **UI Warnings & Confirmation:** Display privacy badges (`Public`, `Unlisted`, `Private`) on album cards in `src/renderer/pages/GalleryBrowser.tsx` and on matched items in `src/renderer/pages/AutoTagger.tsx`. Require explicit confirmation before uploading real person names to `Public` or `Unlisted` galleries, where keywords become publicly visible and searchable.
+- **Local-Only Tagging Option:** Allow marking specific people or albums as local-only (saved in SQLite, `tags.json`, CSV, and XMP sidecars, but excluded from SmugMug `PATCH` uploads).
+
+#### Local Biometric & Cache Lifecycle
+- **At-Rest Protection Model:** Rely on OS full-disk encryption (FileVault / BitLocker / LUKS) combined with strict `0o600` file and `0o700` directory permissions under `{dataDirectory}`.
+- **Optional Cache Auto-Purge:** Add a setting to automatically delete cached `medium/` (~800px) images after face scanning completes (unlocked by persisting face descriptors in Phase 6).
+- **Consistent Cleanup & Deletion (`clearTrainingData`, `resetDatabase`, `disconnect`):**
+  - Update `clearTrainingData()` in `src/main/services/database.ts` (and `src/main/ipc-handlers.ts`) so it also clears `image_tags` and re-syncs/clears `tags.json` rather than leaving stale tag rows behind.
+  - Ensure `resetDatabase()` cleans up cached local files (`thumbnails/`, `medium/`, `tags.json`, `exports/`) or clearly separates DB reset from full local data wipe.
+  - Update `disconnect()` in `src/main/services/oauth.ts` to offer an option (or clear behavior) for wiping `consumerKey` / `consumerSecret` alongside OAuth access tokens.
+- **"Forget Person" Action:** Add a dedicated action in the UI/backend to remove a person's `face_descriptors`, `image_tags`, and `detected_people` entries, re-sync `tags.json`, and optionally strip their keyword from SmugMug photos.
+
+---
+
+### Part 4: Security Hardening (Phase 5)
+
+#### Credential Storage (`src/main/services/oauth.ts`)
+- **Eliminate Silent Plaintext Fallback:** Remove the silent `plain:` prefix fallback when `safeStorage.isEncryptionAvailable()` returns `false`. Fail closed by default (surface a clear error to the user), or require an explicit, prominent user opt-in before storing unencrypted credentials on systems without an OS keyring.
+
+#### Network & CSP Lockdown (`src/main/index.ts`, `src/main/services/oauth.ts`)
+- **Bundle UI Fonts Locally:** Replace external Google Fonts references (`https://fonts.googleapis.com` / `https://fonts.gstatic.com`) with locally bundled font assets so launching the app makes zero third-party requests.
+- **Tighten Content-Security-Policy:** Restrict `style-src`, `font-src`, `img-src`, and `connect-src` in `src/main/index.ts` to remove external font origins and overly broad `https:` directives where local/SmugMug-only origins suffice.
+- **Download Redirect Allowlist:** Restrict HTTP redirects in `OAuthService.downloadFile()` (`src/main/services/oauth.ts`) to an explicit SmugMug domain allowlist (e.g., `*.smugmug.com`) instead of allowing arbitrary HTTPS redirect targets.
+
+#### IPC & Export Hardening (`src/main/ipc-handlers.ts`, `src/main/services/tag-exporter.ts`)
+- **IPC Input Validation:** Validate argument types, string lengths, and bounds on all IPC handlers in `src/main/ipc-handlers.ts` (e.g., `imageKeys`, `albumKey`, `personName`, `bbox`, `settings` updates).
+- **Enforce Approval Before Upload:** Update `tags:uploadTags` to enforce `approved === 1` in `image_tags` rather than relying solely on renderer-side selection state.
+- **CSV Formula-Injection Neutralization:** Update `escapeCsvCell()` in `src/main/services/tag-exporter.ts` to neutralize leading formula characters (`=`, `+`, `-`, `@`, `\t`, `\r`) before quoting so exported CSV files are safe to open in Excel or Google Sheets.
+
+---
+
+### Part 5: SmugMug Sync Safety & Face-Engine Reliability (Phase 6)
+
+#### Prevent Stale Keyword Overwrites & Support Incremental Sync (`src/main/services/smugmug-api.ts`, `src/main/ipc-handlers.ts`)
+- **Fetch Fresh Keywords Before PATCH:** Query the image's current `Keywords` from SmugMug right before sending `PATCH /api/v2/image/{imageKey}` so keywords added or edited on SmugMug after initial sync are never clobbered.
+- **Incremental Album Refresh:** Update `albums:getImages` (or add an explicit refresh path) to fetch newly added photos in already-synced albums and merge updates into SQLite without losing local face/tag state.
+
+#### Persist Detected Face Descriptors (`src/main/services/database.ts`, `src/main/services/face-engine.ts`)
+- **New `detected_faces` Table:** Store each detected face's bounding box and 128-dim descriptor during `detectInAlbum()`.
+- **Instant Auto-Tagging & Re-Matching:** Update `runAutoTagger()` to match directly against persisted `detected_faces` rows instead of re-loading images and re-running SSD MobileNet v1 detection. This enables near-instant re-matching when new people are trained and allows purging `medium/` image caches safely.
+
+#### Training Integrity & Upload Diff Preview (`src/main/services/face-engine.ts`, `src/main/ipc-handlers.ts`, `src/renderer/pages/AutoTagger.tsx`)
+- **Reject Zero-Vector Training Fallbacks:** Remove the silent `new Float32Array(128)` zero-descriptor fallback when face detection fails in `trainFace()` / `faces:trainFace`; instead warn the user and reject the sample so `FaceMatcher` accuracy is not degraded.
+- **Upload Dry-Run / Diff Preview:** Show a before/after `Keywords` diff preview in `AutoTagger.tsx` before sending `PATCH` requests to SmugMug.
+
+#### Packaging & Repo Hygiene (`forge.config.ts`, `src/main/index.ts`, `package.json`)
+- **Packaged Model Paths & Native Modules:** Configure `models/` via `packagerConfig.extraResource` in `forge.config.ts` and resolve via `process.resourcesPath` when `app.isPackaged` in `src/main/index.ts`; verify native module unpacking (`better-sqlite3`, `@napi-rs/canvas`, `@tensorflow/tfjs-node`) under `npm run package` / `npm run make`.
+- **Repository Cleanup:** Remove unused `dummy.txt` from the repository root and review `package.json` metadata (`author.email`) prior to public releases.
+
+---
+
+### Phased Rollout (v2 — Completed)
+
+| Phase | Scope | Status | Verification |
+|-------|-------|--------|--------------|
+| **Phase 4: Privacy Controls** | Album privacy tracking & upload warnings, local-only tag mode, optional `medium/` cache purge, consistent `clearTrainingData`/`resetDatabase`/`disconnect`, "Forget Person" workflow | **Completed** | `npx tsc --noEmit` + `npm test` + `npm run lint` |
+| **Phase 5: Security Hardening** | Remove silent `plain:` token fallback, bundle fonts locally & tighten CSP, SmugMug download redirect allowlist, IPC validation, approved-only upload enforcement, CSV formula neutralization | **Completed** | `npx tsc --noEmit` + `npm test` + `npm run lint` |
+| **Phase 6: Sync Safety, Face DB & Packaging** | Fresh-keyword fetch pre-PATCH, incremental album refresh, `detected_faces` table, reject zero-vector training fallback, upload diff preview, Forge `extraResource` models + repo hygiene | **Completed** | `npx tsc --noEmit` + `npm test` + `npm run lint` |
