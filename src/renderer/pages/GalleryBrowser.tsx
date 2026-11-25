@@ -3,7 +3,12 @@
 // ============================================================
 
 import React, { useState, useEffect, useCallback } from 'react';
-import type { AlbumRecord, DownloadProgress, FaceDetectionProgress } from '../../shared/types';
+import type {
+  AlbumPrivacy,
+  AlbumRecord,
+  DownloadProgress,
+  FaceDetectionProgress,
+} from '../../shared/types';
 import { useToast } from '../components/Toast';
 
 interface GalleryBrowserProps {
@@ -12,6 +17,39 @@ interface GalleryBrowserProps {
 
 type AlbumStatus = 'downloading' | 'scanning' | null;
 
+function getPrivacyBadgeProps(privacy: AlbumPrivacy): {
+  className: string;
+  style?: React.CSSProperties;
+  icon: string;
+} {
+  switch (privacy) {
+    case 'Public':
+      return { className: 'badge badge-warning', icon: '🌐' };
+    case 'Unlisted':
+      return {
+        className: 'badge',
+        style: {
+          background: 'var(--color-accent-glow)',
+          color: 'var(--color-accent-primary)',
+          border: '1px solid rgba(99, 102, 241, 0.3)',
+        },
+        icon: '🔗',
+      };
+    case 'Private':
+      return { className: 'badge badge-success', icon: '🔒' };
+    case 'Unknown':
+    default:
+      return {
+        className: 'badge',
+        style: {
+          background: 'var(--color-bg-tertiary)',
+          color: 'var(--color-text-secondary)',
+        },
+        icon: '❓',
+      };
+  }
+}
+
 export function GalleryBrowser({ onOpenTrainer }: GalleryBrowserProps) {
   const [albums, setAlbums] = useState<AlbumRecord[]>([]);
   const [loading, setLoading] = useState(false);
@@ -19,6 +57,8 @@ export function GalleryBrowser({ onOpenTrainer }: GalleryBrowserProps) {
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
   const [scanProgress, setScanProgress] = useState<FaceDetectionProgress | null>(null);
   const [activeAlbum, setActiveAlbum] = useState<{ key: string; status: AlbumStatus } | null>(null);
+  const [refreshingAlbumKey, setRefreshingAlbumKey] = useState<string | null>(null);
+  const [togglingLocalKey, setTogglingLocalKey] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const { showToast } = useToast();
 
@@ -112,6 +152,44 @@ export function GalleryBrowser({ onOpenTrainer }: GalleryBrowserProps) {
       setScanProgress(null);
     } finally {
       await loadAlbums();
+    }
+  }
+
+  async function handleToggleLocalOnly(album: AlbumRecord) {
+    const nextLocalOnly = !album.localOnly;
+    setTogglingLocalKey(album.albumKey);
+    try {
+      await window.electronAPI.albums.setLocalOnly(album.albumKey, nextLocalOnly);
+      setAlbums(prev =>
+        prev.map(a => (a.albumKey === album.albumKey ? { ...a, localOnly: nextLocalOnly } : a))
+      );
+      showToast(
+        nextLocalOnly
+          ? `Marked "${album.title}" as local-only`
+          : `Allowed SmugMug uploads for "${album.title}"`,
+        'info'
+      );
+    } catch (err) {
+      console.error('Failed to toggle local-only album:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(`Failed to update local-only setting: ${msg}`, 'error');
+    } finally {
+      setTogglingLocalKey(null);
+    }
+  }
+
+  async function handleRefreshImages(album: AlbumRecord) {
+    setRefreshingAlbumKey(album.albumKey);
+    try {
+      const images = await window.electronAPI.albums.refreshImages(album.albumKey);
+      await loadAlbums();
+      showToast(`Refreshed ${album.title} (${images.length} photos)`, 'success');
+    } catch (err) {
+      console.error('Failed to refresh album images:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(`Refresh failed: ${msg}`, 'error', 8000);
+    } finally {
+      setRefreshingAlbumKey(null);
     }
   }
 
@@ -272,17 +350,49 @@ export function GalleryBrowser({ onOpenTrainer }: GalleryBrowserProps) {
                   </div>
 
                   <div className="album-card-badges">
+                    {album.privacy && (() => {
+                      const badgeProps = getPrivacyBadgeProps(album.privacy);
+                      return (
+                        <span
+                          className={badgeProps.className}
+                          style={badgeProps.style}
+                          id={`badge-privacy-${album.albumKey}`}
+                        >
+                          {badgeProps.icon} {album.privacy}
+                        </span>
+                      );
+                    })()}
                     {album.thumbsDownloaded && (
                       <span className="badge badge-success">✓ Thumbnails</span>
                     )}
+                    <label
+                      className="badge"
+                      style={{
+                        cursor: isBusy || togglingLocalKey === album.albumKey ? 'not-allowed' : 'pointer',
+                        background: album.localOnly ? 'var(--color-info-bg)' : 'var(--color-bg-tertiary)',
+                        color: album.localOnly ? 'var(--color-info)' : 'var(--color-text-secondary)',
+                        border: `1px solid ${album.localOnly ? 'rgba(59, 130, 246, 0.3)' : 'var(--color-border)'}`,
+                      }}
+                      title="Keep tags local-only and skip SmugMug uploads for this album"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={Boolean(album.localOnly)}
+                        disabled={isBusy || togglingLocalKey === album.albumKey}
+                        onChange={() => handleToggleLocalOnly(album)}
+                        id={`toggle-local-only-${album.albumKey}`}
+                        style={{ accentColor: 'var(--color-info)', width: 13, height: 13, cursor: 'pointer' }}
+                      />
+                      Local-only
+                    </label>
                   </div>
 
-                  <div className="flex gap-2" style={{ marginTop: 'var(--space-4)' }}>
+                  <div className="flex gap-2" style={{ marginTop: 'var(--space-4)', flexWrap: 'wrap' }}>
                     {!album.thumbsDownloaded ? (
                       <button
                         className="btn btn-secondary btn-sm"
                         onClick={() => handleDownloadThumbnails(album.albumKey)}
-                        disabled={isBusy}
+                        disabled={isBusy || refreshingAlbumKey === album.albumKey}
                         id={`btn-download-${album.albumKey}`}
                       >
                         {status === 'downloading' ? <span className="spinner" /> : '⬇'}
@@ -293,7 +403,7 @@ export function GalleryBrowser({ onOpenTrainer }: GalleryBrowserProps) {
                         <button
                           className="btn btn-secondary btn-sm"
                           onClick={() => handleScanFaces(album.albumKey)}
-                          disabled={isBusy}
+                          disabled={isBusy || refreshingAlbumKey === album.albumKey}
                           id={`btn-scan-${album.albumKey}`}
                         >
                           {status === 'scanning' ? <span className="spinner" /> : '🔍'}
@@ -302,13 +412,28 @@ export function GalleryBrowser({ onOpenTrainer }: GalleryBrowserProps) {
                         <button
                           className="btn btn-primary btn-sm"
                           onClick={() => onOpenTrainer(album.albumKey)}
-                          disabled={isBusy}
+                          disabled={isBusy || refreshingAlbumKey === album.albumKey}
                           id={`btn-train-${album.albumKey}`}
                         >
                           🎓 Train
                         </button>
                       </>
                     )}
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => handleRefreshImages(album)}
+                      disabled={isBusy || refreshingAlbumKey !== null}
+                      id={`btn-refresh-${album.albumKey}`}
+                      title="Pull newly added photos from SmugMug"
+                    >
+                      {refreshingAlbumKey === album.albumKey ? (
+                        <span className="spinner" style={{ width: 14, height: 14 }} />
+                      ) : (
+                        '🔄'
+                      )}
+                      {refreshingAlbumKey === album.albumKey ? 'Refreshing...' : 'Refresh'}
+                    </button>
                   </div>
                 </div>
               </div>

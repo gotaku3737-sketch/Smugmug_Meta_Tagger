@@ -2,47 +2,81 @@
 // Auto-Tagger — Review & Upload Face Tags
 // ============================================================
 
-import React, { useState, useEffect, useCallback } from 'react';
-import type { ImageRecord, TagUploadProgress } from '../../shared/types';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import {
+  mergeKeywords,
+  type AlbumPrivacy,
+  type AlbumRecord,
+  type ImageRecord,
+  type KeywordDiffPreview,
+  type TagUploadProgress,
+  type UploadTagsResult,
+} from '../../shared/types';
 import { VirtualList } from '../components/VirtualList';
 import { useToast } from '../components/Toast';
 
 const ROW_HEIGHT = 72;
 const LIST_HEIGHT = 500;
 
+function getPrivacyBadgeProps(privacy: AlbumPrivacy): {
+  className: string;
+  style?: React.CSSProperties;
+} {
+  switch (privacy) {
+    case 'Public':
+      return { className: 'badge badge-warning' };
+    case 'Unlisted':
+      return {
+        className: 'badge',
+        style: {
+          background: 'var(--color-accent-glow)',
+          color: 'var(--color-accent-primary)',
+          border: '1px solid rgba(99, 102, 241, 0.3)',
+        },
+      };
+    case 'Private':
+      return { className: 'badge badge-success' };
+    case 'Unknown':
+    default:
+      return {
+        className: 'badge',
+        style: {
+          background: 'var(--color-bg-tertiary)',
+          color: 'var(--color-text-secondary)',
+        },
+      };
+  }
+}
+
 export function AutoTagger() {
   const [results, setResults] = useState<ImageRecord[]>([]);
+  const [albums, setAlbums] = useState<AlbumRecord[]>([]);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<TagUploadProgress | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previews, setPreviews] = useState<KeywordDiffPreview[]>([]);
+  const [allowPublicSetting, setAllowPublicSetting] = useState(false);
+  const [confirmPublicChecked, setConfirmPublicChecked] = useState(false);
   const { showToast } = useToast();
 
-  useEffect(() => {
-    loadResults();
-
-    const unsubscribe = window.electronAPI.tags.onUploadProgress((progress) => {
-      setUploadProgress(progress);
-      if (progress.completed === progress.total) {
-        setTimeout(() => {
-          setUploadProgress(null);
-          setUploading(false);
-          loadResults();
-          showToast(`Successfully uploaded tags for ${progress.total} photos`, 'success');
-        }, 1500);
-      }
-    });
-
-    return unsubscribe;
-  }, []);
+  const albumMap = useMemo(() => new Map(albums.map(a => [a.albumKey, a])), [albums]);
 
   const loadResults = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await window.electronAPI.tags.getUntaggedResults();
+      const [data, albumList, currentSettings] = await Promise.all([
+        window.electronAPI.tags.getUntaggedResults(),
+        window.electronAPI.albums.getAll(),
+        window.electronAPI.settings.get(),
+      ]);
       setResults(data);
+      setAlbums(albumList);
+      setAllowPublicSetting(Boolean(currentSettings.allowPublicUploads));
       // Auto-select high confidence matches
       const highConfidence = new Set<string>();
       data.forEach(img => {
@@ -58,6 +92,21 @@ export function AutoTagger() {
       setLoading(false);
     }
   }, [showToast]);
+
+  useEffect(() => {
+    loadResults();
+
+    const unsubscribe = window.electronAPI.tags.onUploadProgress((progress) => {
+      setUploadProgress(progress);
+      if (progress.completed === progress.total) {
+        setTimeout(() => {
+          setUploadProgress(null);
+        }, 1200);
+      }
+    });
+
+    return unsubscribe;
+  }, [loadResults]);
 
   async function handleRunAutoTagger() {
     setRunning(true);
@@ -105,16 +154,123 @@ export function AutoTagger() {
     setSelectedKeys(new Set());
   }
 
-  async function handleUpload() {
+  async function handleOpenUploadPreview() {
     if (selectedKeys.size === 0) return;
+    const keys = Array.from(selectedKeys);
+    setPreviewOpen(true);
+    setPreviewLoading(true);
+    setConfirmPublicChecked(false);
+    try {
+      const [rawPreviews, currentSettings, people] = await Promise.all([
+        window.electronAPI.tags.previewUpload(keys),
+        window.electronAPI.settings.get(),
+        window.electronAPI.faces.getPeople(),
+      ]);
+      setAllowPublicSetting(Boolean(currentSettings.allowPublicUploads));
+
+      const peopleByName = new Map(people.map(p => [p.name, p]));
+      const resultsByKey = new Map(results.map(r => [r.imageKey, r]));
+      const knownPeopleNames =
+        currentSettings.keywordFormat === 'plain' ? people.map(p => p.name) : [];
+
+      // If matches haven't been approved yet in DB, project the keyword diff from detectedPeople
+      const resolvedPreviews = rawPreviews.map((preview) => {
+        const img = resultsByKey.get(preview.imageKey);
+        const pendingNames = Array.from(
+          new Set((img?.detectedPeople ?? []).map(p => p.personName))
+        );
+        if (
+          preview.afterKeywords === preview.beforeKeywords &&
+          preview.skippedPeople.length === 0 &&
+          !preview.localOnly &&
+          pendingNames.length > 0
+        ) {
+          const skippedPeople = pendingNames.filter(name => Boolean(peopleByName.get(name)?.localOnly));
+          const uploadableNames = pendingNames.filter(name => !peopleByName.get(name)?.localOnly);
+          const isLocalOnly = uploadableNames.length === 0;
+          const afterKeywords = isLocalOnly
+            ? preview.beforeKeywords
+            : mergeKeywords(preview.beforeKeywords, uploadableNames, {
+                mode: currentSettings.keywordFormat,
+                prefix: currentSettings.keywordPrefix,
+                previousPersonNames:
+                  currentSettings.keywordFormat === 'plain' ? knownPeopleNames : undefined,
+              });
+          return {
+            ...preview,
+            afterKeywords,
+            localOnly: isLocalOnly,
+            skippedPeople,
+          };
+        }
+        return preview;
+      });
+
+      setPreviews(resolvedPreviews);
+    } catch (err) {
+      console.error('Failed to preview upload:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      showToast(`Preview failed: ${msg}`, 'error');
+      setPreviewOpen(false);
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  async function handleConfirmUpload() {
+    if (selectedKeys.size === 0) return;
+    const keys = Array.from(selectedKeys);
     setUploading(true);
     try {
-      await window.electronAPI.tags.uploadTags(Array.from(selectedKeys));
+      const selectedImages = results.filter(img => selectedKeys.has(img.imageKey));
+      for (const img of selectedImages) {
+        if (img.detectedPeople && img.detectedPeople.length > 0) {
+          const uniqueNames = Array.from(new Set(img.detectedPeople.map(p => p.personName)));
+          await window.electronAPI.tags.approveMatches(img.imageKey, uniqueNames);
+        }
+      }
+
+      const allowPublic = hasPublicOrUnlistedTarget
+        ? allowPublicSetting || confirmPublicChecked
+        : allowPublicSetting;
+
+      const uploadResult: UploadTagsResult = await window.electronAPI.tags.uploadTags(keys, {
+        allowPublic,
+      });
+
+      setPreviewOpen(false);
+      await loadResults();
+
+      const summaryParts = [
+        `Uploaded ${uploadResult.uploaded} photo${uploadResult.uploaded === 1 ? '' : 's'}`,
+      ];
+      if (uploadResult.skippedPublic > 0) {
+        summaryParts.push(`${uploadResult.skippedPublic} skipped (Public/Unlisted)`);
+      }
+      if (uploadResult.skippedLocalOnly > 0) {
+        summaryParts.push(`${uploadResult.skippedLocalOnly} skipped (Local-only)`);
+      }
+      if (uploadResult.skippedUnapproved > 0) {
+        summaryParts.push(`${uploadResult.skippedUnapproved} skipped (Unapproved)`);
+      }
+      const hasSkipped =
+        uploadResult.skippedPublic > 0 ||
+        uploadResult.skippedLocalOnly > 0 ||
+        uploadResult.skippedUnapproved > 0;
+      const toastType =
+        uploadResult.uploaded === 0 && hasSkipped
+          ? 'warning'
+          : hasSkipped
+            ? 'info'
+            : 'success';
+      showToast(summaryParts.join(' · '), toastType, 6000);
     } catch (err) {
       console.error('Failed to upload tags:', err);
       const msg = err instanceof Error ? err.message : String(err);
       showToast(`Upload failed: ${msg}`, 'error');
+    } finally {
       setUploading(false);
+      setUploadProgress(null);
     }
   }
 
@@ -144,6 +300,31 @@ export function AutoTagger() {
     if (confidence >= 0.5) return 'var(--color-warning)';
     return 'var(--color-danger)';
   }
+
+  const publicOrUnlistedMatched = useMemo(
+    () =>
+      results.filter(img => {
+        const album = albumMap.get(img.albumKey);
+        return album?.privacy === 'Public' || album?.privacy === 'Unlisted';
+      }),
+    [results, albumMap]
+  );
+
+  const publicOrUnlistedSelectedCount = useMemo(
+    () =>
+      publicOrUnlistedMatched.filter(
+        img => selectedKeys.has(img.imageKey) && !albumMap.get(img.albumKey)?.localOnly
+      ).length,
+    [publicOrUnlistedMatched, selectedKeys, albumMap]
+  );
+
+  const hasPublicOrUnlistedTarget = useMemo(
+    () =>
+      previews.some(
+        p => !p.localOnly && (p.albumPrivacy === 'Public' || p.albumPrivacy === 'Unlisted')
+      ),
+    [previews]
+  );
 
   if (loading && results.length === 0) {
     return (
@@ -193,7 +374,7 @@ export function AutoTagger() {
                 </button>
                 <button
                   className="btn btn-primary"
-                  onClick={handleUpload}
+                  onClick={handleOpenUploadPreview}
                   disabled={uploading || selectedKeys.size === 0}
                   id="btn-upload-tags"
                 >
@@ -205,6 +386,36 @@ export function AutoTagger() {
           </div>
         </div>
       </div>
+
+      {/* Public / Unlisted Album Warning Banner */}
+      {publicOrUnlistedMatched.length > 0 && (
+        <div
+          className="card mb-4"
+          id="public-album-warning-banner"
+          style={{
+            borderColor: 'rgba(245, 158, 11, 0.35)',
+            background: 'var(--color-warning-bg)',
+            padding: 'var(--space-4) var(--space-5)',
+          }}
+        >
+          <div className="flex items-center gap-3">
+            <span style={{ fontSize: 'var(--font-size-lg)' }}>⚠️</span>
+            <div style={{ fontSize: 'var(--font-size-sm)' }}>
+              <strong style={{ color: 'var(--color-warning)' }}>
+                Public / Unlisted Gallery Notice:
+              </strong>{' '}
+              {publicOrUnlistedMatched.length} matched photo
+              {publicOrUnlistedMatched.length === 1 ? '' : 's'} belong to{' '}
+              <strong>Public</strong> or <strong>Unlisted</strong> albums
+              {publicOrUnlistedSelectedCount > 0
+                ? ` (${publicOrUnlistedSelectedCount} currently selected for upload)`
+                : ''}
+              . Uploading will make recognized person names visible on SmugMug unless marked{' '}
+              <code>Local-only</code>.
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Upload Progress */}
       {uploadProgress && (
@@ -302,6 +513,7 @@ export function AutoTagger() {
             renderItem={(img) => (
               <TaggerRow
                 img={img}
+                album={albumMap.get(img.albumKey)}
                 selected={selectedKeys.has(img.imageKey)}
                 onToggle={toggleSelection}
                 confidenceColor={confidenceColor}
@@ -309,6 +521,219 @@ export function AutoTagger() {
             )}
           />
         </>
+      )}
+
+      {/* Preview & Confirm Upload Modal */}
+      {previewOpen && (
+        <div
+          id="upload-preview-modal"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.65)',
+            backdropFilter: 'blur(4px)',
+            zIndex: 1000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 'var(--space-6)',
+          }}
+        >
+          <div
+            className="card"
+            style={{
+              width: '100%',
+              maxWidth: 760,
+              maxHeight: '85vh',
+              display: 'flex',
+              flexDirection: 'column',
+              background: 'var(--color-bg-secondary)',
+              borderColor: 'var(--color-border-hover)',
+              boxShadow: 'var(--shadow-lg)',
+            }}
+          >
+            <div className="card-header">
+              <div>
+                <h3 className="card-title">Preview &amp; Confirm Upload</h3>
+                <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)' }}>
+                  Review SmugMug keyword changes for {selectedKeys.size} selected photo
+                  {selectedKeys.size === 1 ? '' : 's'}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => setPreviewOpen(false)}
+                disabled={uploading}
+                id="btn-close-preview-modal"
+              >
+                ✕
+              </button>
+            </div>
+
+            {previewLoading ? (
+              <div className="empty-state" style={{ padding: 'var(--space-8)' }}>
+                <div className="spinner spinner-lg" />
+                <p className="text-muted mt-4">Preparing keyword diff preview...</p>
+              </div>
+            ) : (
+              <>
+                {hasPublicOrUnlistedTarget && (
+                  <div
+                    id="modal-public-upload-warning"
+                    style={{
+                      padding: 'var(--space-4)',
+                      marginBottom: 'var(--space-4)',
+                      borderRadius: 'var(--radius-md)',
+                      background: 'var(--color-warning-bg)',
+                      border: '1px solid rgba(245, 158, 11, 0.4)',
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, color: 'var(--color-warning)', fontSize: 'var(--font-size-sm)' }}>
+                      ⚠️ Uploading to Public / Unlisted SmugMug Galleries
+                    </div>
+                    <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-primary)', marginTop: 'var(--space-1)' }}>
+                      One or more selected photos belong to a Public or Unlisted album. Person names
+                      written to SmugMug keywords may be visible to anyone with access to the gallery.
+                    </p>
+                    {!allowPublicSetting ? (
+                      <label
+                        htmlFor="checkbox-confirm-public-upload"
+                        className="flex items-center gap-2 mt-4"
+                        style={{ cursor: 'pointer', fontSize: 'var(--font-size-xs)', fontWeight: 500 }}
+                      >
+                        <input
+                          id="checkbox-confirm-public-upload"
+                          type="checkbox"
+                          checked={confirmPublicChecked}
+                          onChange={e => setConfirmPublicChecked(e.target.checked)}
+                          disabled={uploading}
+                          style={{ accentColor: 'var(--color-warning)', width: 15, height: 15 }}
+                        />
+                        I understand that uploading writes person names to Public/Unlisted SmugMug galleries
+                      </label>
+                    ) : (
+                      <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)', marginTop: 'var(--space-2)' }}>
+                        Note: &quot;Allow uploads to Public/Unlisted albums&quot; is enabled in Settings.
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                <div
+                  style={{
+                    flex: 1,
+                    overflowY: 'auto',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 'var(--space-3)',
+                    paddingRight: 'var(--space-1)',
+                  }}
+                >
+                  {previews.map((item) => {
+                    const privacyBadge = getPrivacyBadgeProps(item.albumPrivacy);
+                    return (
+                      <div
+                        key={item.imageKey}
+                        id={`preview-item-${item.imageKey}`}
+                        style={{
+                          padding: 'var(--space-3) var(--space-4)',
+                          borderRadius: 'var(--radius-md)',
+                          background: 'var(--color-bg-tertiary)',
+                          border: '1px solid var(--color-border)',
+                        }}
+                      >
+                        <div className="flex justify-between items-center" style={{ gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                          <div style={{ fontWeight: 600, fontSize: 'var(--font-size-sm)' }}>
+                            {item.filename}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {item.albumTitle && (
+                              <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-secondary)' }}>
+                                {item.albumTitle}
+                              </span>
+                            )}
+                            <span className={privacyBadge.className} style={privacyBadge.style}>
+                              {item.albumPrivacy}
+                            </span>
+                            {item.localOnly && (
+                              <span className="badge badge-info">Local-only (will skip)</span>
+                            )}
+                          </div>
+                        </div>
+
+                        {item.skippedPeople.length > 0 && (
+                          <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-info)', marginTop: 'var(--space-2)' }}>
+                            Skipped local-only people: {item.skippedPeople.join(', ')}
+                          </div>
+                        )}
+
+                        <div
+                          style={{
+                            marginTop: 'var(--space-2)',
+                            display: 'grid',
+                            gridTemplateColumns: '64px 1fr',
+                            gap: '4px 8px',
+                            fontSize: 'var(--font-size-xs)',
+                          }}
+                        >
+                          <span style={{ color: 'var(--color-text-tertiary)' }}>Before:</span>
+                          <code style={{ color: 'var(--color-text-secondary)', wordBreak: 'break-word' }}>
+                            {item.beforeKeywords || '(none)'}
+                          </code>
+                          <span style={{ color: 'var(--color-text-tertiary)' }}>After:</span>
+                          <code
+                            style={{
+                              color: item.localOnly
+                                ? 'var(--color-text-tertiary)'
+                                : item.afterKeywords !== item.beforeKeywords
+                                  ? 'var(--color-success)'
+                                  : 'var(--color-text-secondary)',
+                              wordBreak: 'break-word',
+                            }}
+                          >
+                            {item.afterKeywords || '(none)'}
+                          </code>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+
+            <div className="flex justify-between items-center mt-4" style={{ paddingTop: 'var(--space-3)', borderTop: '1px solid var(--color-border)' }}>
+              <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-tertiary)' }}>
+                Matches are approved upon confirmation before uploading.
+              </span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setPreviewOpen(false)}
+                  disabled={uploading}
+                  id="btn-cancel-upload-preview"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={handleConfirmUpload}
+                  disabled={
+                    previewLoading ||
+                    uploading ||
+                    (hasPublicOrUnlistedTarget && !allowPublicSetting && !confirmPublicChecked)
+                  }
+                  id="btn-confirm-upload"
+                >
+                  {uploading ? <span className="spinner" /> : '✓'}
+                  {uploading ? 'Uploading...' : 'Confirm Upload'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -320,12 +745,21 @@ export function AutoTagger() {
 
 interface TaggerRowProps {
   img: ImageRecord;
+  album?: AlbumRecord;
   selected: boolean;
   onToggle: (key: string) => void;
   confidenceColor: (c: number) => string;
 }
 
-const TaggerRow = React.memo(function TaggerRow({ img, selected, onToggle, confidenceColor }: TaggerRowProps) {
+const TaggerRow = React.memo(function TaggerRow({
+  img,
+  album,
+  selected,
+  onToggle,
+  confidenceColor,
+}: TaggerRowProps) {
+  const privacyBadge = album?.privacy ? getPrivacyBadgeProps(album.privacy) : null;
+
   return (
     <div
       className="card"
@@ -381,13 +815,36 @@ const TaggerRow = React.memo(function TaggerRow({ img, selected, onToggle, confi
         )}
       </div>
 
-      {/* Filename + face count */}
+      {/* Filename + face count + album privacy */}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 500, fontSize: 'var(--font-size-sm)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {img.filename}
         </div>
-        <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-tertiary)' }}>
-          {img.faceCount} face{img.faceCount !== 1 ? 's' : ''} detected
+        <div className="flex items-center gap-2" style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-text-tertiary)', overflow: 'hidden' }}>
+          <span style={{ whiteSpace: 'nowrap' }}>
+            {img.faceCount} face{img.faceCount !== 1 ? 's' : ''} detected
+          </span>
+          {album && (
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              · {album.title}
+            </span>
+          )}
+          {privacyBadge && album?.privacy && (
+            <span
+              className={privacyBadge.className}
+              style={{ ...privacyBadge.style, padding: '1px 6px', fontSize: '10px' }}
+            >
+              {album.privacy}
+            </span>
+          )}
+          {album?.localOnly && (
+            <span
+              className="badge badge-info"
+              style={{ padding: '1px 6px', fontSize: '10px' }}
+            >
+              Local-only
+            </span>
+          )}
         </div>
       </div>
 
