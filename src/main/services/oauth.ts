@@ -10,6 +10,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import OAuth from 'oauth-1.0a';
 import type { OAuthTokens, OAuthRequestToken, AuthStatus, SmugMugUser } from '../../shared/types';
+import { isAllowedSmugMugHost } from './security-utils';
+
+export { isAllowedSmugMugHost } from './security-utils';
 
 const SMUGMUG_REQUEST_TOKEN_URL = 'https://api.smugmug.com/services/oauth/1.0a/getRequestToken';
 const SMUGMUG_AUTHORIZE_URL = 'https://api.smugmug.com/services/oauth/1.0a/authorize';
@@ -155,12 +158,22 @@ export class OAuthService {
     }
   }
 
-  disconnect(): void {
+  disconnect(clearConsumerKeys = false): void {
     this.accessToken = '';
     this.accessTokenSecret = '';
     this.pendingRequestToken = '';
     this.pendingRequestTokenSecret = '';
-    this.saveCredentials();
+
+    if (clearConsumerKeys) {
+      this.consumerKey = '';
+      this.consumerSecret = '';
+      this.oauth = null;
+      if (fs.existsSync(this.credentialsPath)) {
+        fs.unlinkSync(this.credentialsPath);
+      }
+    } else {
+      this.saveCredentials();
+    }
   }
 
   isAuthenticated(): boolean {
@@ -220,9 +233,19 @@ export class OAuthService {
           return;
         }
 
-        const parsedUrl = new URL(requestUrl);
+        let parsedUrl: URL;
+        try {
+          parsedUrl = new URL(requestUrl);
+        } catch {
+          reject(new Error(`Invalid download URL: ${requestUrl}`));
+          return;
+        }
         if (parsedUrl.protocol !== 'https:') {
           reject(new Error(`Invalid protocol for download: ${parsedUrl.protocol}. Only HTTPS is allowed.`));
+          return;
+        }
+        if (!isAllowedSmugMugHost(parsedUrl.hostname)) {
+          reject(new Error(`Disallowed download host: ${parsedUrl.hostname}. Only SmugMug domains are allowed.`));
           return;
         }
 
@@ -236,7 +259,14 @@ export class OAuthService {
 
         const req = https.request(options, (res) => {
           if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-            const redirectUrl = new URL(res.headers.location, requestUrl).href;
+            res.resume();
+            let redirectUrl: string;
+            try {
+              redirectUrl = new URL(res.headers.location, requestUrl).href;
+            } catch {
+              reject(new Error(`Invalid redirect URL: ${res.headers.location}`));
+              return;
+            }
             makeRequest(redirectUrl, redirectCount + 1);
             return;
           }
@@ -430,13 +460,17 @@ export class OAuthService {
     if (safeStorage.isEncryptionAvailable()) {
       return safeStorage.encryptString(text).toString('base64');
     }
-    // Fallback: store as-is (less secure, but works in dev)
-    return `plain:${text}`;
+    throw new Error(
+      'OS keychain encryption (safeStorage) is unavailable. Refusing to store credentials in plaintext.'
+    );
   }
 
   private decrypt(encoded: string): string {
     if (!encoded) return '';
     if (encoded.startsWith('plain:')) {
+      console.warn(
+        '[OAuthService] Reading legacy plaintext credential entry; re-save credentials to encrypt via OS keychain.'
+      );
       return encoded.slice(6);
     }
     if (safeStorage.isEncryptionAvailable()) {

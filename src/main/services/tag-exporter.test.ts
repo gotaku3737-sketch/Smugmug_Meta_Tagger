@@ -122,6 +122,17 @@ describe('TagExporter', () => {
     });
   });
 
+  test('escapeCsvCell neutralizes spreadsheet formula injection', () => {
+    assert.equal(escapeCsvCell('=SUM(A1)'), "'=SUM(A1)");
+    assert.equal(escapeCsvCell('+cmd'), "'+cmd");
+    assert.equal(escapeCsvCell('-1+1'), "'-1+1");
+    assert.equal(escapeCsvCell('@SUM'), "'@SUM");
+    assert.equal(escapeCsvCell('\t=1'), "'\t=1");
+    assert.equal(escapeCsvCell('\r=1'), '"\'\r=1"');
+    assert.equal(escapeCsvCell('=1,2'), '"\'=1,2"');
+    assert.equal(escapeCsvCell('normal text'), 'normal text');
+  });
+
   test('serializeImageToXmp emits dc:subject, MWG center coords, and XML escapes', () => {
     const xmpPrefixed = serializeImageToXmp(sampleImages.photo_1, {
       mode: 'prefixed',
