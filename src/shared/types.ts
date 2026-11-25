@@ -12,11 +12,15 @@ export interface SmugMugUser {
   imageUrl?: string;
 }
 
+export type AlbumPrivacy = 'Public' | 'Unlisted' | 'Private' | 'Unknown';
+
 export interface SmugMugAlbum {
   albumKey: string;
   title: string;
   imageCount: number;
   coverImageUrl?: string;
+  privacy?: AlbumPrivacy;
+  localOnly?: boolean;
   webUri?: string;
   lastUpdated?: string;
 }
@@ -70,6 +74,7 @@ export interface Person {
   id: number;
   name: string;
   descriptorCount: number;
+  localOnly?: boolean;
   createdAt: string;
 }
 
@@ -143,8 +148,29 @@ export interface AlbumRecord {
   title: string;
   imageCount: number;
   coverImageUrl?: string;
+  privacy?: AlbumPrivacy;
+  localOnly?: boolean;
   thumbsDownloaded: boolean;
   syncedAt?: string;
+}
+
+export interface KeywordDiffPreview {
+  imageKey: string;
+  filename: string;
+  albumKey: string;
+  albumTitle: string;
+  albumPrivacy: AlbumPrivacy;
+  beforeKeywords: string;
+  afterKeywords: string;
+  localOnly: boolean;
+  skippedPeople: string[];
+}
+
+export interface UploadTagsResult {
+  uploaded: number;
+  skippedPublic: number;
+  skippedLocalOnly: number;
+  skippedUnapproved: number;
 }
 
 // -----------------------------------------------------------
@@ -206,6 +232,8 @@ export interface AppSettings {
   keywordFormat: KeywordFormatMode; // default 'prefixed'
   keywordPrefix: string;            // default 'Person:'
   autoSaveTagManifest: boolean;     // default true
+  autoPurgeMediumCache: boolean;    // default false
+  allowPublicUploads: boolean;      // default false
 }
 
 // -----------------------------------------------------------
@@ -262,7 +290,7 @@ export interface ElectronAPI {
     startAuth(): Promise<OAuthRequestToken>;
     completeAuth(verifier: string): Promise<SmugMugUser>;
     getAuthStatus(): Promise<AuthStatus>;
-    disconnect(): Promise<void>;
+    disconnect(clearConsumerKeys?: boolean): Promise<void>;
   };
 
   // Albums & Images
@@ -270,6 +298,8 @@ export interface ElectronAPI {
     sync(): Promise<AlbumRecord[]>;
     getAll(): Promise<AlbumRecord[]>;
     getImages(albumKey: string): Promise<ImageRecord[]>;
+    refreshImages(albumKey: string): Promise<ImageRecord[]>;
+    setLocalOnly(albumKey: string, localOnly: boolean): Promise<void>;
   };
 
   // Downloads
@@ -285,6 +315,8 @@ export interface ElectronAPI {
     trainFace(imageKey: string, bbox: BoundingBox, personName: string): Promise<void>;
     getPeople(): Promise<Person[]>;
     deletePerson(personId: number): Promise<void>;
+    setPersonLocalOnly(personId: number, localOnly: boolean): Promise<void>;
+    forgetPerson(personId: number, removeFromSmugMug?: boolean): Promise<{ removedLocal: number; removedRemote: number }>;
     onDetectionProgress(callback: (progress: FaceDetectionProgress) => void): () => void;
   };
 
@@ -293,7 +325,8 @@ export interface ElectronAPI {
     runAutoTagger(): Promise<void>;
     getUntaggedResults(): Promise<ImageRecord[]>;
     approveMatches(imageKey: string, approvedNames: string[]): Promise<void>;
-    uploadTags(imageKeys: string[]): Promise<void>;
+    previewUpload(imageKeys: string[]): Promise<KeywordDiffPreview[]>;
+    uploadTags(imageKeys: string[], options?: { allowPublic?: boolean }): Promise<UploadTagsResult>;
     exportManifest(): Promise<TagExportResult>;
     importManifest(): Promise<TagImportResult>;
     exportCsv(): Promise<TagExportResult>;
@@ -409,4 +442,31 @@ export function mergeKeywords(
   const newPersonTags = uniqueNames.map(name => `${prefix}${name}`);
 
   return [...nonPersonTags, ...newPersonTags].join('; ');
+}
+
+/** Remove a single person's formatted keyword from an existing SmugMug keyword string. */
+export function removePersonKeyword(
+  existingKeywords: string,
+  personName: string,
+  options?: KeywordFormatOptions
+): { keywords: string; removed: boolean } {
+  const existing = existingKeywords
+    ? existingKeywords.split(';').map(k => k.trim()).filter(Boolean)
+    : [];
+
+  const target = formatPersonKeyword(personName, options).toLowerCase();
+  if (!target) {
+    return { keywords: existing.join('; '), removed: false };
+  }
+
+  let removed = false;
+  const remaining = existing.filter(k => {
+    if (k.toLowerCase() === target) {
+      removed = true;
+      return false;
+    }
+    return true;
+  });
+
+  return { keywords: remaining.join('; '), removed };
 }

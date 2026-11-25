@@ -15,14 +15,17 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('smugmug:completeAuth', verifier),
     getAuthStatus: () =>
       ipcRenderer.invoke('smugmug:getAuthStatus'),
-    disconnect: () =>
-      ipcRenderer.invoke('smugmug:disconnect'),
+    disconnect: (clearConsumerKeys?: boolean) =>
+      ipcRenderer.invoke('smugmug:disconnect', clearConsumerKeys),
   },
 
   albums: {
     sync: () => ipcRenderer.invoke('albums:sync'),
     getAll: () => ipcRenderer.invoke('albums:getAll'),
     getImages: (albumKey: string) => ipcRenderer.invoke('albums:getImages', albumKey),
+    refreshImages: (albumKey: string) => ipcRenderer.invoke('albums:refreshImages', albumKey),
+    setLocalOnly: (albumKey: string, localOnly: boolean) =>
+      ipcRenderer.invoke('albums:setLocalOnly', albumKey, localOnly),
   },
 
   photos: {
@@ -46,6 +49,10 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('faces:getPeople'),
     deletePerson: (personId: number) =>
       ipcRenderer.invoke('faces:deletePerson', personId),
+    setPersonLocalOnly: (personId: number, localOnly: boolean) =>
+      ipcRenderer.invoke('faces:setPersonLocalOnly', personId, localOnly),
+    forgetPerson: (personId: number, removeFromSmugMug?: boolean) =>
+      ipcRenderer.invoke('faces:forgetPerson', personId, removeFromSmugMug),
     onDetectionProgress: (callback: (progress: FaceDetectionProgress) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, progress: FaceDetectionProgress) => callback(progress);
       ipcRenderer.on('faces:detectionProgress', handler);
@@ -60,8 +67,10 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('tags:getUntaggedResults'),
     approveMatches: (imageKey: string, approvedNames: string[]) =>
       ipcRenderer.invoke('tags:approveMatches', imageKey, approvedNames),
-    uploadTags: (imageKeys: string[]) =>
-      ipcRenderer.invoke('tags:uploadTags', imageKeys),
+    previewUpload: (imageKeys: string[]) =>
+      ipcRenderer.invoke('tags:previewUpload', imageKeys),
+    uploadTags: (imageKeys: string[], options?: { allowPublic?: boolean }) =>
+      ipcRenderer.invoke('tags:uploadTags', imageKeys, options),
     exportManifest: () =>
       ipcRenderer.invoke('tags:exportManifest'),
     importManifest: () =>

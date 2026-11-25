@@ -25,8 +25,10 @@ if (started) {
 // Data & Model Directories
 // -----------------------------------------------------------
 const dataDir = path.join(app.getPath('userData'), 'smugmug-data');
-// Models are bundled in the repo's models/ directory
-const modelsDir = path.join(app.getAppPath(), 'models');
+// Models are bundled as extraResource in packaged builds or in repo models/ during development
+const modelsDir = app.isPackaged
+  ? path.join(process.resourcesPath, 'models')
+  : path.join(app.getAppPath(), 'models');
 
 // -----------------------------------------------------------
 // Persistent Settings (stored in a simple JSON file)
@@ -40,6 +42,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   keywordFormat: 'prefixed',
   keywordPrefix: PERSON_PREFIX,
   autoSaveTagManifest: true,
+  autoPurgeMediumCache: false,
+  allowPublicUploads: false,
 };
 
 function normalizeSettings(raw: Partial<AppSettings>, base: AppSettings): AppSettings {
@@ -68,6 +72,16 @@ function normalizeSettings(raw: Partial<AppSettings>, base: AppSettings): AppSet
       ? raw.autoSaveTagManifest
       : base.autoSaveTagManifest;
 
+  const autoPurgeMediumCache =
+    typeof raw.autoPurgeMediumCache === 'boolean'
+      ? raw.autoPurgeMediumCache
+      : base.autoPurgeMediumCache;
+
+  const allowPublicUploads =
+    typeof raw.allowPublicUploads === 'boolean'
+      ? raw.allowPublicUploads
+      : base.allowPublicUploads;
+
   return {
     recognitionThreshold,
     concurrentDownloads,
@@ -75,6 +89,8 @@ function normalizeSettings(raw: Partial<AppSettings>, base: AppSettings): AppSet
     keywordFormat,
     keywordPrefix,
     autoSaveTagManifest,
+    autoPurgeMediumCache,
+    allowPublicUploads,
   };
 }
 
@@ -131,7 +147,12 @@ function initializeServices(): void {
   api = new SmugMugAPI(oauth);
   db = new DatabaseService(dataDir);
   downloader = new DownloaderService(oauth, db, dataDir, currentSettings.concurrentDownloads);
-  faceEngine = new FaceEngine(db, modelsDir, currentSettings.recognitionThreshold);
+  faceEngine = new FaceEngine(
+    db,
+    modelsDir,
+    currentSettings.recognitionThreshold,
+    () => currentSettings.autoPurgeMediumCache
+  );
   tagExporter = new TagExporterService(db, dataDir, () => currentSettings);
 
   registerIpcHandlers({
@@ -141,6 +162,7 @@ function initializeServices(): void {
     downloader,
     faceEngine,
     tagExporter,
+    dataDir,
     getSettings: () => currentSettings,
     onSettingsUpdate: (partial) => {
       currentSettings = normalizeSettings(partial, currentSettings);
@@ -244,7 +266,7 @@ app.on('ready', () => {
     callback({
       responseHeaders: {
         ...details.responseHeaders,
-        'Content-Security-Policy': ["default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https: file:; connect-src 'self' https:;"],
+        'Content-Security-Policy': ["default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: https: file:; connect-src 'self';"],
         'X-Content-Type-Options': ['nosniff'],
         'X-Frame-Options': ['DENY'],
         'X-XSS-Protection': ['1; mode=block'],
